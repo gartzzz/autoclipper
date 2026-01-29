@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoClipper</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Estado 1: Setup -->
+        <section id="setup-state" class="state active">
+            <header class="panel-header">
+                <h1>AutoClipper</h1>
+                <button id="settings-btn" class="icon-btn" title="Configuracion">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z"/>
+                        <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319z"/>
+                    </svg>
+                </button>
+            </header>
+
+            <div class="content">
+                <label class="input-label">Pega la transcripcion aqui:</label>
+                <div id="transcript-drop" class="drop-zone" tabindex="0">
+                    <textarea id="transcript-input" placeholder="Cmd+V o arrastra un archivo SRT..."></textarea>
+                </div>
+
+                <div id="transcript-info" class="info-bar hidden">
+                    <span class="check-icon">&#10003;</span>
+                    <span id="word-count">0 palabras detectadas</span>
+                </div>
+
+                <button id="analyze-btn" class="primary-btn" disabled>
+                    Analizar Momentos Virales
+                </button>
+
+                <p class="tip">
+                    <strong>Tip:</strong> En Premiere, panel Transcripcion → Click derecho → "Copy Transcript"
+                </p>
+            </div>
+        </section>
+
+        <!-- Estado 2: Review -->
+        <section id="review-state" class="state">
+            <header class="panel-header">
+                <button id="back-to-setup" class="icon-btn" title="Volver">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path fill-rule="evenodd" d="M12 8a.5.5 0 0 1-.5.5H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H11.5a.5.5 0 0 1 .5.5z"/>
+                    </svg>
+                </button>
+                <span id="review-title">Revisar Momentos</span>
+                <div class="nav-keys">
+                    <span class="key">←</span>
+                    <span class="key">→</span>
+                </div>
+            </header>
+
+            <div class="content">
+                <div id="clip-counter" class="clip-counter">[Clip 1/8]</div>
+                <h2 id="clip-title" class="clip-title">Hook emocional</h2>
+
+                <div id="clip-preview" class="clip-preview">
+                    <div class="waveform-placeholder"></div>
+                    <button id="play-in-monitor" class="play-btn">Ver en monitor</button>
+                </div>
+
+                <div id="clip-transcript" class="clip-transcript">
+                    "...y ahi fue cuando todo cambio para siempre..."
+                </div>
+
+                <div class="clip-meta">
+                    <span id="clip-timecode">00:01:34 - 00:02:15</span>
+                    <span id="clip-score" class="viral-score">94%</span>
+                </div>
+
+                <div class="action-buttons">
+                    <button id="reject-btn" class="action-btn reject">
+                        <span class="key-hint">←</span> Rechazar
+                    </button>
+                    <button id="replay-btn" class="action-btn replay">
+                        <span class="key-hint">⟳</span>
+                    </button>
+                    <button id="approve-btn" class="action-btn approve">
+                        Aprobar <span class="key-hint">→</span>
+                    </button>
+                </div>
+
+                <div id="progress-dots" class="progress-dots">
+                    <!-- Dots generados dinamicamente -->
+                </div>
+            </div>
+        </section>
+
+        <!-- Estado 3: Generate -->
+        <section id="generate-state" class="state">
+            <header class="panel-header">
+                <button id="back-to-review" class="icon-btn" title="Volver">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path fill-rule="evenodd" d="M12 8a.5.5 0 0 1-.5.5H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H11.5a.5.5 0 0 1 .5.5z"/>
+                    </svg>
+                </button>
+                <span>Listo para Generar</span>
+                <button id="close-generate" class="icon-btn" title="Cerrar">×</button>
+            </header>
+
+            <div class="content">
+                <div id="approved-count" class="approved-count">5 clips aprobados</div>
+
+                <div id="approved-list" class="approved-list">
+                    <!-- Lista generada dinamicamente -->
+                </div>
+
+                <div class="preset-selector">
+                    <label>Preset de subtitulos:</label>
+                    <select id="subtitle-preset">
+                        <option value="viral_yellow">Viral Yellow</option>
+                        <option value="minimal_white">Minimal White</option>
+                        <option value="none">Sin subtitulos</option>
+                    </select>
+                </div>
+
+                <button id="generate-btn" class="primary-btn">
+                    Generar Secuencias
+                </button>
+
+                <div id="countdown" class="countdown hidden">
+                    Auto-inicia en <span id="countdown-num">3</span>s...
+                </div>
+            </div>
+        </section>
+
+        <!-- Estado: Analyzing -->
+        <section id="analyzing-state" class="state">
+            <header class="panel-header">
+                <span>Analizando...</span>
+                <button id="cancel-analysis" class="icon-btn" title="Cancelar">×</button>
+            </header>
+
+            <div class="content center">
+                <div class="loader"></div>
+                <p id="analysis-status">Conectando con Ollama...</p>
+                <div id="analysis-progress" class="progress-bar">
+                    <div id="analysis-progress-fill" class="progress-fill"></div>
+                </div>
+                <p id="moments-found" class="moments-found">0 momentos encontrados</p>
+            </div>
+        </section>
+
+        <!-- Estado: Generating -->
+        <section id="generating-state" class="state">
+            <header class="panel-header">
+                <span>Generando Clips...</span>
+            </header>
+
+            <div class="content">
+                <div id="generation-progress" class="progress-bar">
+                    <div id="generation-progress-fill" class="progress-fill"></div>
+                </div>
+                <p id="generation-status">Creando secuencias...</p>
+
+                <div id="generation-list" class="generation-list">
+                    <!-- Lista generada dinamicamente -->
+                </div>
+
+                <p class="continue-tip">Puedes seguir trabajando en Premiere.<br>Te notificaremos cuando termine.</p>
+            </div>
+        </section>
+
+        <!-- Estado: Error -->
+        <section id="error-state" class="state">
+            <header class="panel-header">
+                <span>Error</span>
+                <button id="close-error" class="icon-btn" title="Cerrar">×</button>
+            </header>
+
+            <div class="content center">
+                <div class="error-icon">!</div>
+                <p id="error-message">No se pudo conectar con Ollama</p>
+                <button id="retry-btn" class="primary-btn">Reintentar</button>
+                <button id="fallback-btn" class="secondary-btn">Usar deteccion alternativa</button>
+            </div>
+        </section>
+    </div>
+
+    <script src="js/lib/CSInterface.js"></script>
+    <script src="js/modules/srt-parser.js"></script>
+    <script src="js/modules/ollama-client.js"></script>
+    <script src="js/modules/ui-controller.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
