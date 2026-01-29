@@ -6,7 +6,7 @@
 
 const OpenRouterClient = {
     apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
-    model: 'moonshotai/kimi-k2:free',
+    model: 'google/gemma-2-9b-it:free',  // Modelo gratuito estable
 
     // API key - loaded from config or set directly
     _apiKey: null,
