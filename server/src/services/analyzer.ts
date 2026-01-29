@@ -1,10 +1,15 @@
 /**
  * Viral Content Analyzer Service
- * Analyzes transcripts using Ollama to find viral moments
+ * Analyzes transcripts using LLM (OpenRouter or Ollama) to find viral moments
  */
 
-import { chat } from './ollama.js';
+import { chat as openrouterChat } from './openrouter.js';
+import { chat as ollamaChat } from './ollama.js';
 import { chunkTranscript } from './chunker.js';
+
+// Use OpenRouter by default, Ollama if USE_OLLAMA=true
+const useOllama = process.env.USE_OLLAMA === 'true';
+const chat = useOllama ? ollamaChat : openrouterChat;
 import { SYSTEM_PROMPT, buildUserPrompt } from '../prompts/viral-detection.js';
 import { logger } from '../utils/logger.js';
 import type { TranscriptSegment, ViralClip, AnalyzeOptions } from '../types/index.js';

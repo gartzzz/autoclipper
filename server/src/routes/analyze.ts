@@ -4,12 +4,18 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { checkOllamaHealth, DEFAULT_MODEL } from '../services/ollama.js';
+import { checkOllamaHealth, DEFAULT_MODEL as OLLAMA_MODEL } from '../services/ollama.js';
+import { checkOpenRouterHealth, DEFAULT_MODEL as OPENROUTER_MODEL } from '../services/openrouter.js';
 import { analyzeTranscript } from '../services/analyzer.js';
 import { logger } from '../utils/logger.js';
 import type { AnalyzeRequest, HealthResponse, StreamEvent } from '../types/index.js';
 
 const router = Router();
+
+// Use OpenRouter by default, Ollama if USE_OLLAMA=true
+const useOllama = process.env.USE_OLLAMA === 'true';
+const checkHealth = useOllama ? checkOllamaHealth : checkOpenRouterHealth;
+const DEFAULT_MODEL = useOllama ? OLLAMA_MODEL : OPENROUTER_MODEL;
 
 // Track ongoing analysis for cancellation
 let currentAnalysis: AbortController | null = null;
@@ -20,12 +26,12 @@ let currentAnalysis: AbortController | null = null;
  */
 router.get('/health', async (_req: Request, res: Response) => {
   try {
-    const health = await checkOllamaHealth();
+    const health = await checkHealth();
 
     const response: HealthResponse = {
       status: health.connected ? 'ok' : 'error',
-      message: health.error || 'AutoClipper server running',
-      ollamaConnected: health.connected,
+      message: health.error || `AutoClipper server running (${useOllama ? 'Ollama' : 'OpenRouter'})`,
+      ollamaConnected: health.connected, // Keep field name for backwards compat
       model: health.model || undefined
     };
 
