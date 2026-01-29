@@ -15,6 +15,27 @@
     --radius: 6px;
 }
 
+/* Text input */
+.text-input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    font-family: monospace;
+    font-size: 11px;
+}
+
+.text-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.text-input::placeholder {
+    color: var(--text-secondary);
+}
+
 * {
     margin: 0;
     padding: 0;

@@ -139,7 +139,7 @@
 
             <div class="content center">
                 <div class="loader"></div>
-                <p id="analysis-status">Conectando con Ollama...</p>
+                <p id="analysis-status">Conectando con IA...</p>
                 <div id="analysis-progress" class="progress-bar">
                     <div id="analysis-progress-fill" class="progress-fill"></div>
                 </div>
@@ -176,16 +176,47 @@
 
             <div class="content center">
                 <div class="error-icon">!</div>
-                <p id="error-message">No se pudo conectar con Ollama</p>
+                <p id="error-message">Error de conexion</p>
                 <button id="retry-btn" class="primary-btn">Reintentar</button>
-                <button id="fallback-btn" class="secondary-btn">Usar deteccion alternativa</button>
+                <button id="fallback-btn" class="secondary-btn">Configurar API Key</button>
+            </div>
+        </section>
+
+        <!-- Estado: Settings -->
+        <section id="settings-state" class="state">
+            <header class="panel-header">
+                <button id="back-from-settings" class="icon-btn" title="Volver">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path fill-rule="evenodd" d="M12 8a.5.5 0 0 1-.5.5H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H11.5a.5.5 0 0 1 .5.5z"/>
+                    </svg>
+                </button>
+                <span>Configuracion</span>
+                <span></span>
+            </header>
+
+            <div class="content">
+                <label class="input-label">OpenRouter API Key:</label>
+                <input type="password" id="api-key-input" class="text-input" placeholder="sk-or-v1-...">
+
+                <p class="tip" style="margin-top: 8px; margin-bottom: 16px;">
+                    Gratis en <a href="#" id="get-key-link">openrouter.ai/keys</a>
+                </p>
+
+                <button id="save-key-btn" class="primary-btn">
+                    Guardar
+                </button>
+
+                <div id="key-status" class="info-bar hidden" style="margin-top: 12px;">
+                    <span class="check-icon">&#10003;</span>
+                    <span>API Key guardada</span>
+                </div>
             </div>
         </section>
     </div>
 
     <script src="js/lib/CSInterface.js"></script>
     <script src="js/modules/srt-parser.js"></script>
-    <script src="js/modules/ollama-client.js"></script>
+    <script src="js/modules/openrouter-client.js"></script>
     <script src="js/modules/ui-controller.js"></script>
     <script src="js/main.js"></script>
 </body>

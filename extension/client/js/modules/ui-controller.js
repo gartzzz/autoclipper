@@ -23,7 +23,13 @@ const UIController = {
         this.cacheElements();
         this.bindEvents();
         this.bindKeyboardShortcuts();
-        this.setState('setup');
+
+        // Check if API key is configured
+        if (!OpenRouterClient.hasApiKey()) {
+            this.setState('settings');
+        } else {
+            this.setState('setup');
+        }
     },
 
     /**
@@ -38,6 +44,7 @@ const UIController = {
             analyzingState: document.getElementById('analyzing-state'),
             generatingState: document.getElementById('generating-state'),
             errorState: document.getElementById('error-state'),
+            settingsState: document.getElementById('settings-state'),
 
             // Setup
             transcriptInput: document.getElementById('transcript-input'),
@@ -45,6 +52,7 @@ const UIController = {
             transcriptInfo: document.getElementById('transcript-info'),
             wordCount: document.getElementById('word-count'),
             analyzeBtn: document.getElementById('analyze-btn'),
+            settingsBtn: document.getElementById('settings-btn'),
 
             // Review
             clipCounter: document.getElementById('clip-counter'),
@@ -83,7 +91,14 @@ const UIController = {
             errorMessage: document.getElementById('error-message'),
             retryBtn: document.getElementById('retry-btn'),
             fallbackBtn: document.getElementById('fallback-btn'),
-            closeError: document.getElementById('close-error')
+            closeError: document.getElementById('close-error'),
+
+            // Settings
+            apiKeyInput: document.getElementById('api-key-input'),
+            saveKeyBtn: document.getElementById('save-key-btn'),
+            keyStatus: document.getElementById('key-status'),
+            backFromSettings: document.getElementById('back-from-settings'),
+            getKeyLink: document.getElementById('get-key-link')
         };
     },
 
@@ -107,6 +122,9 @@ const UIController = {
         });
         elements.transcriptDrop.addEventListener('drop', (e) => this.onFileDrop(e));
 
+        // Settings button
+        elements.settingsBtn.addEventListener('click', () => this.setState('settings'));
+
         // Analyze button
         elements.analyzeBtn.addEventListener('click', () => this.startAnalysis());
 
@@ -122,11 +140,82 @@ const UIController = {
 
         // Error actions
         elements.retryBtn.addEventListener('click', () => this.startAnalysis());
-        elements.fallbackBtn.addEventListener('click', () => this.useFallbackDetection());
+        elements.fallbackBtn.addEventListener('click', () => this.setState('settings'));
         elements.closeError.addEventListener('click', () => this.setState('setup'));
 
         // Cancel analysis
         elements.cancelAnalysis.addEventListener('click', () => this.cancelAnalysis());
+
+        // Settings actions
+        elements.saveKeyBtn.addEventListener('click', () => this.saveApiKey());
+        elements.backFromSettings.addEventListener('click', () => {
+            if (OpenRouterClient.hasApiKey()) {
+                this.setState('setup');
+            }
+        });
+        elements.getKeyLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.openExternalLink('https://openrouter.ai/keys');
+        });
+
+        // Enter key in API key input
+        elements.apiKeyInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.saveApiKey();
+            }
+        });
+    },
+
+    /**
+     * Open external link
+     */
+    openExternalLink(url) {
+        if (typeof csInterface !== 'undefined') {
+            csInterface.openURLInDefaultBrowser(url);
+        } else {
+            window.open(url, '_blank');
+        }
+    },
+
+    /**
+     * Save API key
+     */
+    async saveApiKey() {
+        const key = this.elements.apiKeyInput.value.trim();
+
+        if (!key) {
+            return;
+        }
+
+        if (!key.startsWith('sk-or-')) {
+            this.elements.keyStatus.innerHTML = '<span style="color: var(--danger);">Key invalida (debe empezar con sk-or-)</span>';
+            this.elements.keyStatus.classList.remove('hidden');
+            return;
+        }
+
+        OpenRouterClient.setApiKey(key);
+
+        // Test the key
+        this.elements.saveKeyBtn.textContent = 'Verificando...';
+        this.elements.saveKeyBtn.disabled = true;
+
+        const health = await OpenRouterClient.checkHealth();
+
+        this.elements.saveKeyBtn.textContent = 'Guardar';
+        this.elements.saveKeyBtn.disabled = false;
+
+        if (health.ok) {
+            this.elements.keyStatus.innerHTML = '<span class="check-icon">&#10003;</span> <span>Conectado a Kimi K2</span>';
+            this.elements.keyStatus.classList.remove('hidden');
+
+            // Go to setup after short delay
+            setTimeout(() => {
+                this.setState('setup');
+            }, 1000);
+        } else {
+            this.elements.keyStatus.innerHTML = `<span style="color: var(--danger);">${health.message}</span>`;
+            this.elements.keyStatus.classList.remove('hidden');
+        }
     },
 
     /**
@@ -168,6 +257,14 @@ const UIController = {
         }
 
         this.currentState = state;
+
+        // Load current API key in settings
+        if (state === 'settings') {
+            const currentKey = OpenRouterClient.getApiKey();
+            if (currentKey) {
+                this.elements.apiKeyInput.value = currentKey;
+            }
+        }
     },
 
     /**
@@ -222,21 +319,20 @@ const UIController = {
      * Start analysis
      */
     async startAnalysis() {
+        // Check API key first
+        if (!OpenRouterClient.hasApiKey()) {
+            this.setState('settings');
+            return;
+        }
+
         this.setState('analyzing');
         this.elements.analysisProgress.style.width = '0%';
         this.elements.momentsFound.textContent = '0 momentos encontrados';
+        this.elements.analysisStatus.textContent = 'Conectando con IA...';
 
         try {
-            // Check server health first
-            const health = await OllamaClient.checkHealth();
-            if (!health.ok) {
-                throw new Error(health.message);
-            }
-
-            this.elements.analysisStatus.textContent = 'Analizando transcripcion...';
-
             // Analyze transcript
-            this.viralClips = await OllamaClient.analyzeTranscript(
+            this.viralClips = await OpenRouterClient.analyzeTranscript(
                 this.segments,
                 {},
                 (progress) => {
@@ -272,8 +368,8 @@ const UIController = {
     /**
      * Cancel ongoing analysis
      */
-    async cancelAnalysis() {
-        await OllamaClient.cancelAnalysis();
+    cancelAnalysis() {
+        // OpenRouter doesn't support cancel, just go back
         this.setState('setup');
     },
 
@@ -439,7 +535,7 @@ const UIController = {
                 if (typeof csInterface !== 'undefined') {
                     await new Promise((resolve, reject) => {
                         csInterface.evalScript(
-                            `createSequenceFromClip(${JSON.stringify(clip)}, "${preset}")`,
+                            `createSequenceFromClip(${JSON.stringify(JSON.stringify(clip))}, "${preset}")`,
                             (result) => {
                                 if (result === 'error') {
                                     reject(new Error('Failed to create sequence'));
@@ -471,17 +567,8 @@ const UIController = {
                 `${i + 1}/${total} secuencias creadas`;
         }
 
-        // Done - could show a completion message or return to setup
+        // Done
         this.elements.generationStatus.textContent = 'Generacion completada!';
-    },
-
-    /**
-     * Use fallback detection (silence-based or energy-based)
-     */
-    useFallbackDetection() {
-        // TODO: Implement fallback detection
-        alert('Deteccion alternativa aun no implementada');
-        this.setState('setup');
     }
 };
 
