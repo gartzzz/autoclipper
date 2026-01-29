@@ -1,15 +1,16 @@
 # AutoClipper
 
-Plugin de Adobe Premiere Pro que usa IA (Kimi K2 gratis) para detectar momentos virales y generar clips automaticamente.
+Plugin de Adobe Premiere Pro que usa IA para detectar momentos virales y generar clips automaticamente. Optimizado para clases, mentorias y contenido educativo.
 
 ## Caracteristicas
 
 - Analiza transcripciones con IA para detectar momentos con potencial viral
+- **Algoritmo optimizado** para clases/mentorias con marca irreverente
 - Interfaz keyboard-first para revisar clips rapidamente (← → para rechazar/aprobar)
 - Genera secuencias independientes por cada clip aprobado
 - Soporta presets de subtitulos
 - **Sin servidor** - el plugin llama directamente a OpenRouter
-- **Gratis** - usa Kimi K2 (moonshotai/kimi-k2:free)
+- **Gratis** - usa DeepSeek R1 (64K contexto, optimizado para razonamiento)
 
 ## Instalacion
 
@@ -58,6 +59,25 @@ Window > Extensions > AutoClipper
 | → | Aprobar clip |
 | ← | Rechazar clip |
 | Espacio | Reproducir clip |
+
+## Algoritmo de Viralidad
+
+Cada clip se puntua (0-100) con estos factores:
+
+| Factor | Peso | Descripcion |
+|--------|------|-------------|
+| Insight | 25% | Momento "aha", cambio de perspectiva |
+| Raw | 20% | Lenguaje directo, slang, personalidad |
+| Actionable | 20% | Consejo aplicable inmediatamente |
+| Hook | 15% | Gancho inicial que atrapa |
+| Relatable | 10% | Problema comun que muchos tienen |
+| Standalone | 10% | Funciona sin contexto previo |
+
+**Calibracion:**
+- 85-100: Oro - viral garantizado
+- 70-84: Fuerte - buen potencial
+- 55-69: Decente - necesita buen hook/edicion
+- <55: Descartado automaticamente
 
 ## Estructura
 
