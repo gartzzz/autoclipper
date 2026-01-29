@@ -328,6 +328,7 @@ const UIController = {
         this.setState('analyzing');
         this.elements.analysisProgress.style.width = '0%';
         this.elements.momentsFound.textContent = '0 momentos encontrados';
+        this.elements.momentsFound.style.color = ''; // Reset warning color
         this.elements.analysisStatus.textContent = 'Conectando con IA...';
 
         try {
@@ -345,6 +346,11 @@ const UIController = {
                     if (progress.momentsFound !== undefined) {
                         this.elements.momentsFound.textContent =
                             `${progress.momentsFound} momentos encontrados`;
+                    }
+                    // Show context truncation warning if present
+                    if (progress.warning) {
+                        this.elements.momentsFound.textContent = progress.warning;
+                        this.elements.momentsFound.style.color = '#f39c12';
                     }
                 }
             );

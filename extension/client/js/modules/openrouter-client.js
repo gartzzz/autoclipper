@@ -1,12 +1,20 @@
 /**
  * OpenRouter Client Module
  * Calls OpenRouter API directly from CEP panel (no server needed)
- * Uses Kimi K2 (moonshotai/kimi-k2:free) - completely free model
+ * Uses DeepSeek R1 (deepseek/deepseek-r1:free) - 64K context, optimized for reasoning
  */
 
 const OpenRouterClient = {
     apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
-    model: 'google/gemma-2-9b-it:free',  // Modelo gratuito estable
+    model: 'deepseek/deepseek-r1:free',  // 64K context, optimizado para razonamiento
+
+    // Context window limits (tokens)
+    MODEL_CONTEXT_LIMIT: 64000,   // 64K tokens
+    MAX_OUTPUT_TOKENS: 8192,      // Más espacio para respuesta detallada
+    // Reserve tokens for output, leaving this for input
+    get MAX_INPUT_TOKENS() { return this.MODEL_CONTEXT_LIMIT - this.MAX_OUTPUT_TOKENS; },
+    // Approximate chars per token (conservative estimate for mixed content)
+    CHARS_PER_TOKEN: 3.5,
 
     // API key - loaded from config or set directly
     _apiKey: null,
@@ -108,23 +116,37 @@ const OpenRouterClient = {
             contentType = 'general'
         } = options;
 
-        // Format transcript
-        const transcript = this.formatTranscript(segments);
-
-        onProgress?.({
-            progress: 10,
-            message: 'Sending to AI...',
-            momentsFound: 0
-        });
-
-        // Build prompts
+        // Build prompts and check context limit
         const systemPrompt = this.getSystemPrompt();
-        const userPrompt = this.buildUserPrompt(transcript, {
+        const promptOptions = {
             targetCount,
             minDuration: minClipDuration,
             maxDuration: maxClipDuration,
             contentType
+        };
+
+        // Truncate transcript if needed to fit context window
+        const truncateResult = this.truncateTranscriptToFit(segments, systemPrompt, promptOptions);
+        const transcript = truncateResult.transcript;
+
+        if (truncateResult.wasTruncated) {
+            const percentUsed = Math.round((truncateResult.usedSegments / truncateResult.originalSegments) * 100);
+            console.warn(`[AutoClipper] Transcript truncated to fit context window: ${truncateResult.usedSegments}/${truncateResult.originalSegments} segments (${percentUsed}%)`);
+            onProgress?.({
+                progress: 5,
+                message: `⚠️ Transcript truncated (${percentUsed}% fits in context)`,
+                momentsFound: 0,
+                warning: `Video too long for AI context. Analyzing first ${truncateResult.usedSegments} of ${truncateResult.originalSegments} segments.`
+            });
+        }
+
+        onProgress?.({
+            progress: 10,
+            message: `Sending to AI... (~${truncateResult.estimatedTokens} tokens)`,
+            momentsFound: 0
         });
+
+        const userPrompt = this.buildUserPrompt(transcript, promptOptions);
 
         try {
             const response = await fetch(this.apiUrl, {
@@ -197,12 +219,50 @@ const OpenRouterClient = {
     },
 
     /**
+     * Estimate token count from text (conservative approximation)
+     */
+    estimateTokens(text) {
+        return Math.ceil(text.length / this.CHARS_PER_TOKEN);
+    },
+
+    /**
      * Format segments into timestamped transcript
      */
     formatTranscript(segments) {
         return segments
             .map(seg => `[${this.formatTime(seg.start)}] ${seg.text}`)
             .join('\n');
+    },
+
+    /**
+     * Truncate transcript to fit within context limit
+     * Returns { transcript, wasTruncated, originalSegments, usedSegments }
+     */
+    truncateTranscriptToFit(segments, systemPrompt, options) {
+        const baseUserPrompt = this.buildUserPrompt('', options);
+        const baseTokens = this.estimateTokens(systemPrompt) + this.estimateTokens(baseUserPrompt);
+        const availableTokens = this.MAX_INPUT_TOKENS - baseTokens - 100; // 100 token safety margin
+        const availableChars = availableTokens * this.CHARS_PER_TOKEN;
+
+        let transcript = '';
+        let usedSegments = 0;
+
+        for (const seg of segments) {
+            const line = `[${this.formatTime(seg.start)}] ${seg.text}\n`;
+            if (transcript.length + line.length > availableChars) {
+                break;
+            }
+            transcript += line;
+            usedSegments++;
+        }
+
+        return {
+            transcript: transcript.trim(),
+            wasTruncated: usedSegments < segments.length,
+            originalSegments: segments.length,
+            usedSegments,
+            estimatedTokens: this.estimateTokens(systemPrompt + this.buildUserPrompt(transcript, options))
+        };
     },
 
     /**
@@ -215,19 +275,48 @@ const OpenRouterClient = {
     },
 
     /**
-     * System prompt for viral detection
+     * System prompt for viral detection (optimized for classes/mentoring + irreverent brand)
      */
     getSystemPrompt() {
-        return `You are an expert content strategist and viral video analyst. Your task is to analyze video transcripts and identify moments with high viral potential for short-form content (TikTok, Instagram Reels, YouTube Shorts).
+        return `You are an expert at identifying viral clips from educational content, coaching sessions, and mentorship calls.
 
-You understand what makes content go viral:
-- Strong hooks in the first 3 seconds that stop the scroll
-- Emotional triggers (surprise, joy, anger, fear, curiosity)
-- Controversial or polarizing statements that drive engagement
-- Unique insights or "aha moments" that viewers want to share
-- Complete micro-stories with setup, conflict, and resolution
-- Cliffhangers that make viewers watch until the end
-- Humor and entertainment value
+TARGET: Short-form clips (15-90s) for TikTok, Reels, Shorts from classes and mentoring sessions.
+
+SCORING FORMULA - Calculate viralScore as weighted average:
+- insight (25%): Mentor reveals something that shifts perspective, "aha moment"
+- raw (20%): Unfiltered language, slang, brutal honesty, strong personality - MORE IS BETTER
+- actionable (20%): Specific advice viewer can apply immediately
+- hook (15%): Opening grabs attention, creates curiosity or shock
+- relatable (10%): Addresses common struggle/question
+- standalone (10%): Makes complete sense without prior context
+
+SCORE CALIBRATION:
+- 85-100: Gold - perspective-shifting insight with clear takeaway
+- 70-84: Strong - valuable advice with good hook
+- 55-69: Decent - needs strong editing/hook overlay
+- Below 55: Skip
+
+PATTERNS TO IDENTIFY:
+- "The real reason X doesn't work is..." (contrarian insight)
+- "Most people think... but actually..." (myth-busting)
+- "Here's what I tell all my students..." (insider knowledge)
+- "The #1 mistake I see is..." (common problem)
+- Student asks question → Mentor gives powerful answer
+- Emotional breakthrough moment
+- Concrete framework/steps explained simply
+
+BONUS PATTERNS (prioritize - brand voice):
+- Raw, unfiltered language (slang, colloquialisms, swearing)
+- Inside jokes that make the community feel special
+- Irreverent/provocative statements that break expectations
+- Direct, no-BS delivery - saying what others won't
+- Moments of brutal honesty that hit hard
+
+ANTI-PATTERNS (avoid):
+- Long context-dependent explanations without payoff
+- Incomplete thoughts that need "part 2"
+- Generic corporate-speak advice
+- Overly polished/sanitized moments (boring)
 
 You MUST respond with valid JSON only. No explanations outside the JSON.`;
     },
@@ -244,18 +333,26 @@ ${transcript}
 REQUIREMENTS:
 - Find ${options.targetCount} clips between ${options.minDuration} and ${options.maxDuration} seconds
 - Each clip must make sense as standalone content
-- Prioritize by viral potential, not chronological order
-- Content type: ${options.contentType}
+- Prioritize by viralScore (calculated from weighted factors), not chronological order
+- Look for raw/unfiltered moments - personality and slang are a PLUS
 
 Respond with a JSON array of clips. Each clip must have:
 - startTime: number (seconds from transcript timestamps)
 - endTime: number (seconds)
 - text: string (the actual transcript text for this clip)
-- viralScore: number (0-100)
-- factors: object with scores for: hook, emotion, controversy, insight, storytelling, cliffhanger, humor (each 0-100)
+- viralScore: number (0-100, calculated as: insight×0.25 + raw×0.20 + actionable×0.20 + hook×0.15 + relatable×0.10 + standalone×0.10)
+- factors: {
+    insight: number (0-100) - perspective shift, aha moment
+    raw: number (0-100) - unfiltered language, slang, brutal honesty, personality
+    actionable: number (0-100) - advice viewer can apply today
+    hook: number (0-100) - opening grabs attention
+    relatable: number (0-100) - common problem many have
+    standalone: number (0-100) - works without prior context
+  }
+- hookSuggestion: string (text overlay suggestion for first 3 seconds)
 - suggestedTitle: string (catchy title for the clip)
 - hashtags: array of 3-5 relevant hashtags
-- reasoning: string (brief explanation of why this moment is viral)
+- reasoning: string (brief explanation of why this moment is valuable)
 
 Return ONLY the JSON array, no other text.`;
     },
@@ -290,14 +387,14 @@ Return ONLY the JSON array, no other text.`;
                     text: clip.text || '',
                     viralScore: Math.min(100, Math.max(0, clip.viralScore)),
                     factors: {
-                        hook: clip.factors?.hook || 0,
-                        emotion: clip.factors?.emotion || 0,
-                        controversy: clip.factors?.controversy || 0,
                         insight: clip.factors?.insight || 0,
-                        storytelling: clip.factors?.storytelling || 0,
-                        cliffhanger: clip.factors?.cliffhanger || 0,
-                        humor: clip.factors?.humor || 0
+                        raw: clip.factors?.raw || 0,
+                        actionable: clip.factors?.actionable || 0,
+                        hook: clip.factors?.hook || 0,
+                        relatable: clip.factors?.relatable || 0,
+                        standalone: clip.factors?.standalone || 0
                     },
+                    hookSuggestion: clip.hookSuggestion || '',
                     suggestedTitle: clip.suggestedTitle || 'Untitled Clip',
                     hashtags: Array.isArray(clip.hashtags) ? clip.hashtags : [],
                     reasoning: clip.reasoning || ''
@@ -317,7 +414,7 @@ Return ONLY the JSON array, no other text.`;
         return (
             duration >= options.minClipDuration &&
             duration <= options.maxClipDuration &&
-            clip.viralScore >= 50 &&
+            clip.viralScore >= 55 &&  // Calibrated: below 55 = skip
             clip.startTime >= 0 &&
             clip.endTime > clip.startTime
         );
