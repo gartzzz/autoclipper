@@ -214,6 +214,13 @@ const UIController = {
         elements.ollamaModelSelect.addEventListener('change', (e) => {
             OllamaClient.setModel(e.target.value);
         });
+
+        // Export help - open AutoClipper bin
+        document.getElementById('open-bin-btn')?.addEventListener('click', () => {
+            if (typeof csInterface !== 'undefined') {
+                csInterface.evalScript('revealAutoClipperBin()');
+            }
+        });
     },
 
     /**
@@ -893,7 +900,13 @@ const UIController = {
         }
 
         // Done
-        this.elements.generationStatus.textContent = 'Generacion completada!';
+        this.elements.generationStatus.textContent = '¡Generacion completada!';
+
+        // Show export help
+        const exportHelp = document.getElementById('export-help');
+        if (exportHelp) {
+            exportHelp.classList.remove('hidden');
+        }
     }
 };
 

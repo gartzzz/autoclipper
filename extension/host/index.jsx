@@ -57,6 +57,46 @@ function getActiveSequence() {
 }
 
 /**
+ * Get or create AutoClipper bin in project
+ * @returns {ProjectItem} The AutoClipper bin
+ */
+function getOrCreateAutoClipperBin() {
+    var project = getProject();
+    if (!project) return null;
+
+    var root = project.rootItem;
+    var binName = 'AutoClipper';
+
+    // Search for existing bin
+    for (var i = 0; i < root.children.numItems; i++) {
+        var item = root.children[i];
+        if (item.name === binName && item.type === ProjectItemType.BIN) {
+            return item;
+        }
+    }
+
+    // Create new bin
+    return root.createBin(binName);
+}
+
+/**
+ * Reveal AutoClipper bin in project panel
+ * @returns {string} 'ok' or 'error'
+ */
+function revealAutoClipperBin() {
+    try {
+        var bin = getOrCreateAutoClipperBin();
+        if (bin) {
+            bin.select();
+            return 'ok';
+        }
+        return 'error: Could not find bin';
+    } catch (e) {
+        return 'error: ' + e.message;
+    }
+}
+
+/**
  * Get selected clips in project panel
  * @returns {string} JSON array of selected items
  */
@@ -226,6 +266,12 @@ function createSequenceFromClip(clipDataJSON, presetId) {
             if (presetId && presetId !== 'none') {
                 // TODO: Apply Motion Graphics Template with subtitles
                 // This requires finding the .mogrt and applying it
+            }
+
+            // Move sequence to AutoClipper bin
+            var autoClipperBin = getOrCreateAutoClipperBin();
+            if (autoClipperBin && newSeq.projectItem) {
+                newSeq.projectItem.moveBin(autoClipperBin);
             }
 
             return 'ok';

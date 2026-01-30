@@ -643,6 +643,57 @@ body {
     font-size: 11px;
 }
 
+/* Export Help */
+.export-help {
+    margin-top: 16px;
+    padding: 12px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius);
+    border-left: 3px solid var(--success);
+}
+
+.export-help.hidden {
+    display: none;
+}
+
+.export-help .help-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+    margin-bottom: 12px;
+    color: var(--success);
+}
+
+.export-help .folder-icon {
+    font-size: 16px;
+}
+
+.export-help .help-steps {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.export-help .help-steps p {
+    margin: 0 0 8px 0;
+    color: var(--text-primary);
+}
+
+.export-help ol {
+    margin: 0 0 12px 20px;
+    padding: 0;
+}
+
+.export-help li {
+    margin: 4px 0;
+    line-height: 1.4;
+}
+
+.export-help .secondary-btn {
+    width: 100%;
+    margin-top: 8px;
+}
+
 /* Error State */
 .error-header {
     display: flex;

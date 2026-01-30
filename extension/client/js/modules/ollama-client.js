@@ -179,15 +179,24 @@ const OllamaClient = {
         const optimalContext = this.calculateOptimalContext(systemPrompt, userPrompt);
         const estimatedInputTokens = Math.ceil((systemPrompt.length + userPrompt.length) / this.CHARS_PER_TOKEN);
 
+        // Phase 1: Preparing
+        onProgress?.({
+            progress: 2,
+            message: 'Preparando solicitud...',
+            momentsFound: 0,
+            tokensReceived: 0
+        });
+
+        this._lastRawResponse = '';
+
+        // Phase 2: Sending
         onProgress?.({
             progress: 5,
-            message: `Conectando con ${model}...`,
+            message: `Enviando ~${estimatedInputTokens.toLocaleString()} tokens...`,
             momentsFound: 0,
             tokensReceived: 0,
             contextInfo: `~${estimatedInputTokens} tokens input, ${optimalContext} contexto`
         });
-
-        this._lastRawResponse = '';
 
         try {
             const response = await fetch(`${this.getBaseUrl()}/api/chat`, {
@@ -213,6 +222,14 @@ const OllamaClient = {
                 throw new Error(error.error || `HTTP ${response.status}`);
             }
 
+            // Phase 3: Loading model (cold start)
+            onProgress?.({
+                progress: 8,
+                message: 'Cargando modelo en GPU...',
+                momentsFound: 0,
+                tokensReceived: 0
+            });
+
             // Process stream
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
@@ -222,13 +239,8 @@ const OllamaClient = {
             let tokensReceived = 0;
             let lastProgressUpdate = Date.now();
             const startTime = Date.now();
-
-            onProgress?.({
-                progress: 10,
-                message: 'Modelo pensando...',
-                momentsFound: 0,
-                tokensReceived: 0
-            });
+            let coldStartWarningShown = false;
+            let firstTokenReceived = false;
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -237,12 +249,35 @@ const OllamaClient = {
                 const chunk = decoder.decode(value, { stream: true });
                 const lines = chunk.split('\n').filter(l => l.trim());
 
+                // Check for cold start warning (no tokens after 10s)
+                const now = Date.now();
+                if (!firstTokenReceived && !coldStartWarningShown && (now - startTime) > 10000) {
+                    coldStartWarningShown = true;
+                    onProgress?.({
+                        progress: 8,
+                        message: 'Primera carga del modelo (puede tardar 30-60s)...',
+                        momentsFound: 0,
+                        tokensReceived: 0
+                    });
+                }
+
                 for (const line of lines) {
                     try {
                         const data = JSON.parse(line);
                         const token = data.message?.content || '';
                         fullContent += token;
                         tokensReceived++;
+
+                        // Mark first token received
+                        if (!firstTokenReceived && token) {
+                            firstTokenReceived = true;
+                            onProgress?.({
+                                progress: 10,
+                                message: 'Modelo pensando...',
+                                momentsFound: 0,
+                                tokensReceived: 1
+                            });
+                        }
 
                         // Detect thinking tags from DeepSeek R1
                         if (token.includes('<think>') || fullContent.includes('<think>') && !fullContent.includes('</think>')) {
@@ -256,15 +291,15 @@ const OllamaClient = {
                         }
 
                         // Update progress every 100ms to avoid UI flooding
-                        const now = Date.now();
-                        if (now - lastProgressUpdate > 100) {
-                            lastProgressUpdate = now;
+                        const currentTime = Date.now();
+                        if (currentTime - lastProgressUpdate > 100) {
+                            lastProgressUpdate = currentTime;
 
                             // Calculate progress (10-80% during generation)
                             const progressPct = Math.min(80, 10 + (tokensReceived / 50));
 
                             // Calculate tokens per second
-                            const elapsedSec = (now - startTime) / 1000;
+                            const elapsedSec = (currentTime - startTime) / 1000;
                             const tokensPerSec = elapsedSec > 0 ? (tokensReceived / elapsedSec).toFixed(1) : 0;
 
                             // Extract last meaningful part of thinking
