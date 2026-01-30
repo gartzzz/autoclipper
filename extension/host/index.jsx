@@ -170,139 +170,180 @@ function playClipRange(startTime, endTime) {
 }
 
 /**
+ * Find a sequence's ProjectItem by name in the project
+ * @param {string} seqName - Name of the sequence to find
+ * @returns {ProjectItem|null}
+ */
+function findSequenceProjectItem(seqName) {
+    var project = getProject();
+    if (!project) return null;
+
+    // Search recursively in bins
+    function searchBin(bin) {
+        for (var i = 0; i < bin.children.numItems; i++) {
+            var item = bin.children[i];
+            if (item.type === ProjectItemType.BIN) {
+                var found = searchBin(item);
+                if (found) return found;
+            } else if (item.name === seqName) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    return searchBin(project.rootItem);
+}
+
+/**
  * Create a new sequence from a clip segment
  * @param {string} clipDataJSON - JSON with clip info (startTime, endTime, suggestedTitle)
  * @param {string} presetId - Subtitle preset ID
  * @returns {string} 'ok' or 'error'
  */
 function createSequenceFromClip(clipDataJSON, presetId) {
-    $.writeln('[AutoClipper] createSequenceFromClip called');
-    $.writeln('[AutoClipper] clipDataJSON: ' + clipDataJSON);
-    $.writeln('[AutoClipper] presetId: ' + presetId);
+    $.writeln('[AutoClipper] === createSequenceFromClip START ===');
 
     var project = getProject();
     if (!project) {
         $.writeln('[AutoClipper] ERROR: No project open');
         return 'error: No project open';
     }
+    $.writeln('[AutoClipper] Project: ' + project.name);
 
     try {
         var clipData = JSON.parse(clipDataJSON);
-        $.writeln('[AutoClipper] Parsed clip data - startTime: ' + clipData.startTime + ', endTime: ' + clipData.endTime);
+        $.writeln('[AutoClipper] Clip: ' + clipData.suggestedTitle);
+        $.writeln('[AutoClipper] Time range: ' + clipData.startTime + 's - ' + clipData.endTime + 's');
 
         var seq = getActiveSequence();
-
         if (!seq) {
             $.writeln('[AutoClipper] ERROR: No active sequence');
-            return 'error: No active sequence';
+            return 'error: No active sequence - open a sequence in the timeline first';
         }
-        $.writeln('[AutoClipper] Active sequence: ' + seq.name);
+        $.writeln('[AutoClipper] Source sequence: ' + seq.name);
 
-        // Create a new sequence
-        var seqName = clipData.suggestedTitle || 'AutoClip_' + Date.now();
+        // Get AutoClipper bin first
+        var autoClipperBin = getOrCreateAutoClipperBin();
+        if (!autoClipperBin) {
+            $.writeln('[AutoClipper] ERROR: Could not create AutoClipper bin');
+            return 'error: Could not create AutoClipper bin';
+        }
+        $.writeln('[AutoClipper] AutoClipper bin ready: ' + autoClipperBin.name);
 
-        // Get sequence settings from current sequence
-        var newSeq = project.createNewSequence(seqName, seqName);
-
-        if (!newSeq) return 'error: Could not create sequence';
-
-        // Find the source clip in the original sequence
-        var sourceSeq = seq;
-        var videoTracks = sourceSeq.videoTracks;
-
-        if (videoTracks.numTracks === 0) return 'error: No video tracks';
-
-        var videoTrack = videoTracks[0];
-        var clips = videoTrack.clips;
-
-        // Find clip that contains our time range
-        var ticksPerSecond = 254016000000;
-        var startTicks = clipData.startTime * ticksPerSecond;
-        var endTicks = clipData.endTime * ticksPerSecond;
+        // Find source clip in timeline
+        var videoTracks = seq.videoTracks;
+        if (videoTracks.numTracks === 0) {
+            $.writeln('[AutoClipper] ERROR: No video tracks');
+            return 'error: No video tracks in sequence';
+        }
 
         var sourceClip = null;
-        for (var i = 0; i < clips.numItems; i++) {
-            var clip = clips[i];
-            var clipStart = parseFloat(clip.start.seconds);
-            var clipEnd = parseFloat(clip.end.seconds);
+        var sourceProjectItem = null;
 
-            if (clipStart <= clipData.startTime && clipEnd >= clipData.endTime) {
-                sourceClip = clip;
-                break;
-            }
-        }
+        // Search all video tracks
+        for (var t = 0; t < videoTracks.numTracks && !sourceClip; t++) {
+            var track = videoTracks[t];
+            $.writeln('[AutoClipper] Searching track ' + t + ' (' + track.clips.numItems + ' clips)');
 
-        if (!sourceClip) {
-            // Try to find by overlap
-            for (var j = 0; j < clips.numItems; j++) {
-                var c = clips[j];
-                var cStart = parseFloat(c.start.seconds);
-                var cEnd = parseFloat(c.end.seconds);
+            for (var i = 0; i < track.clips.numItems; i++) {
+                var clip = track.clips[i];
+                var clipStart = parseFloat(clip.start.seconds);
+                var clipEnd = parseFloat(clip.end.seconds);
 
-                if (cStart <= clipData.endTime && cEnd >= clipData.startTime) {
-                    sourceClip = c;
+                // Check if clip contains our time range
+                if (clipStart <= clipData.startTime && clipEnd >= clipData.endTime) {
+                    sourceClip = clip;
+                    sourceProjectItem = clip.projectItem;
+                    $.writeln('[AutoClipper] Found clip: ' + clipStart + 's - ' + clipEnd + 's');
+                    break;
+                }
+                // Check for overlap
+                if (clipStart <= clipData.endTime && clipEnd >= clipData.startTime) {
+                    sourceClip = clip;
+                    sourceProjectItem = clip.projectItem;
+                    $.writeln('[AutoClipper] Found overlapping clip: ' + clipStart + 's - ' + clipEnd + 's');
                     break;
                 }
             }
         }
 
-        if (sourceClip && sourceClip.projectItem) {
-            // Create subclip
-            var subclipName = seqName + '_subclip';
-            var inPoint = clipData.startTime;
-            var outPoint = clipData.endTime;
+        if (!sourceClip || !sourceProjectItem) {
+            $.writeln('[AutoClipper] ERROR: No clip found at time range');
+            return 'error: No clip found at time ' + clipData.startTime + 's - ' + clipData.endTime + 's';
+        }
+        $.writeln('[AutoClipper] Source projectItem: ' + sourceProjectItem.name);
 
-            // Insert into new sequence
+        // Create sequence name (sanitize for filesystem)
+        var seqName = (clipData.suggestedTitle || 'AutoClip_' + Date.now())
+            .replace(/[\\/:*?"<>|]/g, '_')
+            .substring(0, 50);
+
+        // Method 1: Try createNewSequenceFromClips with destination bin
+        $.writeln('[AutoClipper] Creating sequence: ' + seqName);
+
+        // Set in/out on source projectItem before creating sequence
+        var ticksPerSecond = 254016000000;
+
+        // Calculate in/out relative to clip position in timeline
+        var clipStartInTimeline = parseFloat(sourceClip.start.seconds);
+        var mediaInPoint = parseFloat(sourceClip.inPoint.seconds);
+
+        // The offset from clip start to our desired start
+        var offsetFromClipStart = clipData.startTime - clipStartInTimeline;
+        var desiredInPoint = mediaInPoint + offsetFromClipStart;
+        var desiredOutPoint = desiredInPoint + (clipData.endTime - clipData.startTime);
+
+        $.writeln('[AutoClipper] Media in/out: ' + desiredInPoint + 's - ' + desiredOutPoint + 's');
+
+        // Set in/out on the source project item
+        sourceProjectItem.setInPoint(desiredInPoint, 4); // 4 = all media types
+        sourceProjectItem.setOutPoint(desiredOutPoint, 4);
+
+        // Create sequence from the clip with in/out points
+        var newSeq = project.createNewSequenceFromClips(
+            seqName,
+            [sourceProjectItem],
+            autoClipperBin  // Destination bin!
+        );
+
+        // Clear in/out points on source to not affect future uses
+        sourceProjectItem.clearInPoint(4);
+        sourceProjectItem.clearOutPoint(4);
+
+        if (!newSeq) {
+            $.writeln('[AutoClipper] createNewSequenceFromClips failed, trying fallback...');
+
+            // Fallback: create empty sequence and insert clip
+            newSeq = project.createNewSequence(seqName, seqName);
+            if (!newSeq) {
+                $.writeln('[AutoClipper] ERROR: Could not create sequence');
+                return 'error: Could not create sequence';
+            }
+
+            // Insert clip
             var newVideoTrack = newSeq.videoTracks[0];
-
-            // Import the project item and set in/out
-            newSeq.setInPoint(0);
-            newVideoTrack.insertClip(sourceClip.projectItem, 0);
-
-            // Set in/out on the inserted clip
-            var insertedClip = newVideoTrack.clips[0];
-            if (insertedClip) {
-                var mediaStart = parseFloat(insertedClip.inPoint.seconds);
-
-                // Calculate offset from media start
-                var clipOffset = clipData.startTime - parseFloat(sourceClip.start.seconds);
-                var newInPoint = mediaStart + clipOffset;
-                var newOutPoint = newInPoint + (clipData.endTime - clipData.startTime);
-
-                insertedClip.inPoint = new Time();
-                insertedClip.inPoint.seconds = newInPoint;
-                insertedClip.outPoint = new Time();
-                insertedClip.outPoint.seconds = newOutPoint;
+            if (newVideoTrack) {
+                newVideoTrack.insertClip(sourceProjectItem, 0);
+                $.writeln('[AutoClipper] Inserted clip into new sequence');
             }
 
-            // Apply subtitle preset if specified
-            if (presetId && presetId !== 'none') {
-                // TODO: Apply Motion Graphics Template with subtitles
-                // This requires finding the .mogrt and applying it
-            }
-
-            // Move sequence to AutoClipper bin
-            $.writeln('[AutoClipper] Moving sequence to AutoClipper bin...');
-            var autoClipperBin = getOrCreateAutoClipperBin();
-            if (autoClipperBin) {
-                $.writeln('[AutoClipper] AutoClipper bin found/created: ' + autoClipperBin.name);
-                if (newSeq.projectItem) {
-                    newSeq.projectItem.moveBin(autoClipperBin);
-                    $.writeln('[AutoClipper] Sequence moved to bin successfully');
-                } else {
-                    $.writeln('[AutoClipper] WARNING: newSeq.projectItem is null');
-                }
+            // Try to move to bin
+            var seqProjectItem = findSequenceProjectItem(seqName);
+            if (seqProjectItem) {
+                seqProjectItem.moveBin(autoClipperBin);
+                $.writeln('[AutoClipper] Moved sequence to bin');
             } else {
-                $.writeln('[AutoClipper] WARNING: Could not create AutoClipper bin');
+                $.writeln('[AutoClipper] WARNING: Could not find sequence to move to bin');
             }
-
-            $.writeln('[AutoClipper] Sequence creation completed successfully');
-            return 'ok';
         }
 
-        return 'error: Could not find source clip';
+        $.writeln('[AutoClipper] === createSequenceFromClip SUCCESS ===');
+        return 'ok: Created ' + seqName;
 
     } catch (e) {
+        $.writeln('[AutoClipper] ERROR: ' + e.message);
+        $.writeln('[AutoClipper] Line: ' + e.line);
         return 'error: ' + e.message;
     }
 }
