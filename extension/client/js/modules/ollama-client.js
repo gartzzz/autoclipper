@@ -7,6 +7,14 @@ const OllamaClient = {
     _baseUrl: 'http://localhost:11434',
     _model: null,
 
+    // Context configuration
+    // RTX 3080 (10GB) can handle ~24K context fully in GPU with 8B model
+    // We calculate dynamically based on input size
+    MIN_CONTEXT: 8192,      // Minimum context window
+    MAX_CONTEXT: 32768,     // Max for 10GB VRAM (safe limit)
+    CONTEXT_MARGIN: 4096,   // Extra space for output
+    CHARS_PER_TOKEN: 3.5,   // Approximate chars per token
+
     /**
      * Set server URL
      */
@@ -53,6 +61,25 @@ const OllamaClient = {
      */
     isConfigured() {
         return !!this.getModel();
+    },
+
+    /**
+     * Calculate optimal context size based on input
+     * This ensures we use GPU efficiently - smaller context = faster inference
+     */
+    calculateOptimalContext(systemPrompt, userPrompt) {
+        const totalChars = systemPrompt.length + userPrompt.length;
+        const estimatedTokens = Math.ceil(totalChars / this.CHARS_PER_TOKEN);
+
+        // Add margin for output and round up to nearest 2048
+        const neededContext = estimatedTokens + this.CONTEXT_MARGIN;
+        const roundedContext = Math.ceil(neededContext / 2048) * 2048;
+
+        // Clamp between min and max
+        const optimalContext = Math.max(this.MIN_CONTEXT, Math.min(this.MAX_CONTEXT, roundedContext));
+
+        console.log(`[AutoClipper] Input: ~${estimatedTokens} tokens, Context: ${optimalContext}`);
+        return optimalContext;
     },
 
     /**
@@ -148,11 +175,16 @@ const OllamaClient = {
             contentType
         });
 
+        // Calculate optimal context size for this input
+        const optimalContext = this.calculateOptimalContext(systemPrompt, userPrompt);
+        const estimatedInputTokens = Math.ceil((systemPrompt.length + userPrompt.length) / this.CHARS_PER_TOKEN);
+
         onProgress?.({
             progress: 5,
             message: `Conectando con ${model}...`,
             momentsFound: 0,
-            tokensReceived: 0
+            tokensReceived: 0,
+            contextInfo: `~${estimatedInputTokens} tokens input, ${optimalContext} contexto`
         });
 
         this._lastRawResponse = '';
@@ -167,10 +199,11 @@ const OllamaClient = {
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: userPrompt }
                     ],
-                    stream: true,  // Enable streaming!
+                    stream: true,
                     options: {
                         temperature: 0.7,
-                        num_ctx: 65536  // 64K context for long transcripts
+                        num_ctx: optimalContext,  // Dynamic context based on input
+                        num_gpu: 999  // Force all layers to GPU
                     }
                 })
             });
@@ -188,6 +221,7 @@ const OllamaClient = {
             let isThinking = false;
             let tokensReceived = 0;
             let lastProgressUpdate = Date.now();
+            const startTime = Date.now();
 
             onProgress?.({
                 progress: 10,
@@ -229,6 +263,10 @@ const OllamaClient = {
                             // Calculate progress (10-80% during generation)
                             const progressPct = Math.min(80, 10 + (tokensReceived / 50));
 
+                            // Calculate tokens per second
+                            const elapsedSec = (now - startTime) / 1000;
+                            const tokensPerSec = elapsedSec > 0 ? (tokensReceived / elapsedSec).toFixed(1) : 0;
+
                             // Extract last meaningful part of thinking
                             let thinkingPreview = '';
                             if (thinkingContent) {
@@ -244,6 +282,7 @@ const OllamaClient = {
                                 message: isThinking ? 'Razonando...' : 'Generando respuesta...',
                                 momentsFound: 0,
                                 tokensReceived,
+                                tokensPerSec,
                                 thinking: thinkingPreview,
                                 isThinking
                             });

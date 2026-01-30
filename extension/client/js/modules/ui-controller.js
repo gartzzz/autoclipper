@@ -85,6 +85,7 @@ const UIController = {
             clipScore: document.getElementById('clip-score'),
             rejectBtn: document.getElementById('reject-btn'),
             replayBtn: document.getElementById('replay-btn'),
+            skipBtn: document.getElementById('skip-btn'),
             approveBtn: document.getElementById('approve-btn'),
             progressDots: document.getElementById('progress-dots'),
             backToSetup: document.getElementById('back-to-setup'),
@@ -169,6 +170,7 @@ const UIController = {
         elements.rejectBtn.addEventListener('click', () => this.rejectClip());
         elements.approveBtn.addEventListener('click', () => this.approveClip());
         elements.replayBtn.addEventListener('click', () => this.replayClip());
+        elements.skipBtn.addEventListener('click', () => this.skipClip());
         elements.backToSetup.addEventListener('click', () => this.setState('setup'));
 
         // Generate actions
@@ -402,6 +404,19 @@ const UIController = {
                     e.preventDefault();
                     this.approveClip();
                     break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    this.goToPreviousClip();
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    this.goToNextClip();
+                    break;
+                case 's':
+                case 'S':
+                    e.preventDefault();
+                    this.skipClip();
+                    break;
                 case ' ':
                     e.preventDefault();
                     this.replayClip();
@@ -514,6 +529,7 @@ const UIController = {
         this.elements.thinkingPreview.classList.add('hidden');
         this.elements.thinkingText.textContent = '';
         this.elements.tokensCount.textContent = '';
+        this._contextInfoShown = false;
 
         const client = this.getAIClient();
 
@@ -547,9 +563,19 @@ const UIController = {
                         this.elements.thinkingPreview.scrollTop = this.elements.thinkingPreview.scrollHeight;
                     }
 
-                    // Show tokens count
+                    // Show tokens count and speed
                     if (progress.tokensReceived !== undefined) {
-                        this.elements.tokensCount.textContent = `${progress.tokensReceived} tokens recibidos`;
+                        let tokenInfo = `${progress.tokensReceived} tokens`;
+                        if (progress.tokensPerSec) {
+                            tokenInfo += ` (${progress.tokensPerSec} t/s)`;
+                        }
+                        this.elements.tokensCount.textContent = tokenInfo;
+                    }
+
+                    // Show context info (first time only)
+                    if (progress.contextInfo && !this._contextInfoShown) {
+                        this._contextInfoShown = true;
+                        console.log('[AutoClipper]', progress.contextInfo);
                     }
 
                     // Show context truncation warning if present
@@ -631,7 +657,7 @@ const UIController = {
     },
 
     /**
-     * Update progress dots
+     * Update progress dots (clickable for navigation)
      */
     updateProgressDots() {
         const dots = this.viralClips.map((clip, i) => {
@@ -642,11 +668,21 @@ const UIController = {
                 className += ' approved';
             } else if (clip.rejected) {
                 className += ' rejected';
+            } else if (clip.skipped) {
+                className += ' skipped';
             }
-            return `<div class="${className}"></div>`;
+            return `<div class="${className}" data-index="${i}" title="Clip ${i + 1}"></div>`;
         }).join('');
 
         this.elements.progressDots.innerHTML = dots;
+
+        // Make dots clickable
+        this.elements.progressDots.querySelectorAll('.dot').forEach(dot => {
+            dot.addEventListener('click', (e) => {
+                const index = parseInt(e.target.dataset.index);
+                this.goToClip(index);
+            });
+        });
     },
 
     /**
@@ -655,6 +691,7 @@ const UIController = {
     rejectClip() {
         this.viralClips[this.currentClipIndex].rejected = true;
         this.viralClips[this.currentClipIndex].approved = false;
+        this.viralClips[this.currentClipIndex].skipped = false;
         this.nextClip();
     },
 
@@ -664,7 +701,51 @@ const UIController = {
     approveClip() {
         this.viralClips[this.currentClipIndex].approved = true;
         this.viralClips[this.currentClipIndex].rejected = false;
+        this.viralClips[this.currentClipIndex].skipped = false;
         this.nextClip();
+    },
+
+    /**
+     * Skip current clip (no decision) and move to next
+     */
+    skipClip() {
+        this.viralClips[this.currentClipIndex].skipped = true;
+        this.viralClips[this.currentClipIndex].approved = false;
+        this.viralClips[this.currentClipIndex].rejected = false;
+        this.nextClip();
+    },
+
+    /**
+     * Navigate to previous clip without making a decision
+     */
+    goToPreviousClip() {
+        if (this.currentClipIndex > 0) {
+            this.currentClipIndex--;
+            this.updateReviewUI();
+            this.replayClip();
+        }
+    },
+
+    /**
+     * Navigate to next clip without making a decision
+     */
+    goToNextClip() {
+        if (this.currentClipIndex < this.viralClips.length - 1) {
+            this.currentClipIndex++;
+            this.updateReviewUI();
+            this.replayClip();
+        }
+    },
+
+    /**
+     * Jump to a specific clip by index
+     */
+    goToClip(index) {
+        if (index >= 0 && index < this.viralClips.length) {
+            this.currentClipIndex = index;
+            this.updateReviewUI();
+            this.replayClip();
+        }
     },
 
     /**
@@ -697,9 +778,17 @@ const UIController = {
      */
     finishReview() {
         this.approvedClips = this.viralClips.filter(clip => clip.approved);
+        const skippedCount = this.viralClips.filter(clip => clip.skipped).length;
+        const rejectedCount = this.viralClips.filter(clip => clip.rejected).length;
 
         if (this.approvedClips.length === 0) {
-            alert('No aprobaste ningun clip. Vuelve a revisar.');
+            let msg = 'No aprobaste ningun clip.';
+            if (skippedCount > 0) {
+                msg += ` Tienes ${skippedCount} sin revisar (usa flechas arriba/abajo para navegar).`;
+            } else {
+                msg += ' Vuelve a revisar.';
+            }
+            alert(msg);
             this.currentClipIndex = 0;
             this.updateReviewUI();
             return;

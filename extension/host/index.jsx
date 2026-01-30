@@ -111,8 +111,17 @@ function playClipRange(startTime, endTime) {
         // Move playhead to start
         seq.setPlayerPosition(startTicks.toString());
 
-        // Note: There's no direct "play" command in ExtendScript
-        // The user will need to press space or click play
+        // Try to auto-play using QE DOM if available
+        try {
+            if (typeof qe !== 'undefined') {
+                qe.project.getActiveSequence().player.play(1.0);
+            } else if (app.enableQE && app.enableQE()) {
+                qe.project.getActiveSequence().player.play(1.0);
+            }
+        } catch (playErr) {
+            // QE not available, user needs to press space
+            $.writeln('Auto-play not available: ' + playErr.message);
+        }
 
         return 'ok';
     } catch (e) {

@@ -369,6 +369,26 @@ body {
     color: white;
 }
 
+.action-btn.skip {
+    flex: 0 0 60px;
+    background: rgba(136, 136, 136, 0.2);
+    color: var(--text-secondary);
+}
+
+.action-btn.skip:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.nav-hint {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
 .progress-dots {
     display: flex;
     justify-content: center;
@@ -381,6 +401,12 @@ body {
     height: 10px;
     border-radius: 50%;
     background: var(--bg-tertiary);
+    cursor: pointer;
+    transition: transform 0.1s;
+}
+
+.progress-dots .dot:hover {
+    transform: scale(1.4);
 }
 
 .progress-dots .dot.approved {
@@ -389,6 +415,10 @@ body {
 
 .progress-dots .dot.rejected {
     background: var(--danger);
+}
+
+.progress-dots .dot.skipped {
+    background: var(--text-secondary);
 }
 
 .progress-dots .dot.current {
