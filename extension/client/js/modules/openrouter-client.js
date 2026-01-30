@@ -6,7 +6,7 @@
 
 const OpenRouterClient = {
     apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
-    model: 'deepseek/deepseek-r1:free',  // 64K context, optimizado para razonamiento
+    model: 'deepseek/deepseek-r1-0528:free',  // 64K context, optimizado para razonamiento
 
     // Context window limits (tokens)
     MODEL_CONTEXT_LIMIT: 64000,   // 64K tokens
@@ -180,10 +180,15 @@ const OpenRouterClient = {
             }
 
             const data = await response.json();
-            const content = data.choices?.[0]?.message?.content;
+            console.log('[AutoClipper] API Response:', JSON.stringify(data, null, 2));
+
+            // DeepSeek R1 puede devolver reasoning en campo separado
+            const message = data.choices?.[0]?.message;
+            const content = message?.content || message?.reasoning_content || '';
 
             if (!content) {
-                throw new Error('No response from AI');
+                console.error('[AutoClipper] Empty response. Full data:', data);
+                throw new Error('No response from AI - check console for details');
             }
 
             // Parse clips from response

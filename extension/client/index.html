@@ -137,13 +137,20 @@
                 <button id="cancel-analysis" class="icon-btn" title="Cancelar">×</button>
             </header>
 
-            <div class="content center">
-                <div class="loader"></div>
-                <p id="analysis-status">Conectando con IA...</p>
+            <div class="content">
+                <div class="analysis-header">
+                    <div class="loader"></div>
+                    <p id="analysis-status">Conectando con IA...</p>
+                </div>
                 <div id="analysis-progress" class="progress-bar">
                     <div id="analysis-progress-fill" class="progress-fill"></div>
                 </div>
+                <div id="thinking-preview" class="thinking-preview hidden">
+                    <span class="thinking-label">Razonando...</span>
+                    <p id="thinking-text"></p>
+                </div>
                 <p id="moments-found" class="moments-found">0 momentos encontrados</p>
+                <p id="tokens-count" class="tokens-count"></p>
             </div>
         </section>
 
@@ -174,11 +181,18 @@
                 <button id="close-error" class="icon-btn" title="Cerrar">×</button>
             </header>
 
-            <div class="content center">
-                <div class="error-icon">!</div>
-                <p id="error-message">Error de conexion</p>
+            <div class="content">
+                <div class="error-header">
+                    <div class="error-icon">!</div>
+                    <p id="error-message">Error de conexion</p>
+                </div>
+                <div id="error-details" class="error-details hidden">
+                    <span class="details-label">Detalles:</span>
+                    <pre id="error-raw"></pre>
+                </div>
                 <button id="retry-btn" class="primary-btn">Reintentar</button>
-                <button id="fallback-btn" class="secondary-btn">Configurar API Key</button>
+                <button id="fallback-btn" class="secondary-btn">Configurar Backend</button>
+                <button id="show-details-btn" class="secondary-btn">Ver respuesta del modelo</button>
             </div>
         </section>
 
@@ -195,20 +209,53 @@
             </header>
 
             <div class="content">
-                <label class="input-label">OpenRouter API Key:</label>
-                <input type="password" id="api-key-input" class="text-input" placeholder="sk-or-v1-...">
+                <label class="input-label">Backend de IA:</label>
+                <div class="backend-selector">
+                    <button id="backend-openrouter" class="backend-btn active" data-backend="openrouter">
+                        <span class="backend-icon">☁️</span>
+                        <span class="backend-name">OpenRouter</span>
+                        <span class="backend-desc">API online, gratis</span>
+                    </button>
+                    <button id="backend-ollama" class="backend-btn" data-backend="ollama">
+                        <span class="backend-icon">🖥️</span>
+                        <span class="backend-name">Ollama Local</span>
+                        <span class="backend-desc">100% offline</span>
+                    </button>
+                </div>
 
-                <p class="tip" style="margin-top: 8px; margin-bottom: 16px;">
-                    Gratis en <a href="#" id="get-key-link">openrouter.ai/keys</a>
-                </p>
+                <!-- OpenRouter Config -->
+                <div id="openrouter-config" class="backend-config">
+                    <label class="input-label">OpenRouter API Key:</label>
+                    <input type="password" id="api-key-input" class="text-input" placeholder="sk-or-v1-...">
+                    <p class="tip" style="margin-top: 8px;">
+                        Gratis en <a href="#" id="get-key-link">openrouter.ai/keys</a>
+                    </p>
+                </div>
 
-                <button id="save-key-btn" class="primary-btn">
+                <!-- Ollama Config -->
+                <div id="ollama-config" class="backend-config hidden">
+                    <label class="input-label">Servidor Ollama:</label>
+                    <input type="text" id="ollama-url-input" class="text-input" placeholder="http://localhost:11434" value="http://localhost:11434">
+
+                    <label class="input-label" style="margin-top: 12px;">Modelo:</label>
+                    <select id="ollama-model-select" class="text-input">
+                        <option value="">-- Detectar modelos --</option>
+                    </select>
+                    <button id="refresh-models-btn" class="secondary-btn" style="margin-top: 8px;">
+                        Detectar modelos
+                    </button>
+                    <p class="tip" style="margin-top: 8px;">
+                        Recomendado: qwen2.5:14b o llama3.1:8b
+                    </p>
+                </div>
+
+                <button id="save-key-btn" class="primary-btn" style="margin-top: 16px;">
                     Guardar
                 </button>
 
                 <div id="key-status" class="info-bar hidden" style="margin-top: 12px;">
                     <span class="check-icon">&#10003;</span>
-                    <span>API Key guardada</span>
+                    <span>Configuracion guardada</span>
                 </div>
             </div>
         </section>
@@ -217,6 +264,7 @@
     <script src="js/lib/CSInterface.js"></script>
     <script src="js/modules/srt-parser.js"></script>
     <script src="js/modules/openrouter-client.js"></script>
+    <script src="js/modules/ollama-client.js"></script>
     <script src="js/modules/ui-controller.js"></script>
     <script src="js/main.js"></script>
 </body>

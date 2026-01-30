@@ -41,10 +41,6 @@
                             <Height>400</Height>
                         </MinSize>
                     </Geometry>
-                    <Icons>
-                        <Icon Type="Normal">./client/icons/icon-light.png</Icon>
-                        <Icon Type="DarkNormal">./client/icons/icon-dark.png</Icon>
-                    </Icons>
                 </UI>
             </DispatchInfo>
         </Extension>

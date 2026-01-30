@@ -7,6 +7,9 @@ const UIController = {
     // Current state
     currentState: 'setup',
 
+    // Backend: 'openrouter' or 'ollama'
+    currentBackend: 'openrouter',
+
     // Data
     segments: [],
     viralClips: [],
@@ -23,13 +26,32 @@ const UIController = {
         this.cacheElements();
         this.bindEvents();
         this.bindKeyboardShortcuts();
+        this.loadBackendPreference();
 
-        // Check if API key is configured
-        if (!OpenRouterClient.hasApiKey()) {
+        // Check if configured based on backend
+        if (!this.isBackendConfigured()) {
             this.setState('settings');
         } else {
             this.setState('setup');
         }
+    },
+
+    /**
+     * Check if current backend is configured
+     */
+    isBackendConfigured() {
+        if (this.currentBackend === 'ollama') {
+            return OllamaClient.isConfigured();
+        } else {
+            return OpenRouterClient.hasApiKey();
+        }
+    },
+
+    /**
+     * Get current AI client based on selected backend
+     */
+    getAIClient() {
+        return this.currentBackend === 'ollama' ? OllamaClient : OpenRouterClient;
     },
 
     /**
@@ -81,6 +103,9 @@ const UIController = {
             analysisProgress: document.getElementById('analysis-progress-fill'),
             momentsFound: document.getElementById('moments-found'),
             cancelAnalysis: document.getElementById('cancel-analysis'),
+            thinkingPreview: document.getElementById('thinking-preview'),
+            thinkingText: document.getElementById('thinking-text'),
+            tokensCount: document.getElementById('tokens-count'),
 
             // Generating
             generationProgress: document.getElementById('generation-progress-fill'),
@@ -89,16 +114,28 @@ const UIController = {
 
             // Error
             errorMessage: document.getElementById('error-message'),
+            errorDetails: document.getElementById('error-details'),
+            errorRaw: document.getElementById('error-raw'),
             retryBtn: document.getElementById('retry-btn'),
             fallbackBtn: document.getElementById('fallback-btn'),
             closeError: document.getElementById('close-error'),
+            showDetailsBtn: document.getElementById('show-details-btn'),
 
             // Settings
             apiKeyInput: document.getElementById('api-key-input'),
             saveKeyBtn: document.getElementById('save-key-btn'),
             keyStatus: document.getElementById('key-status'),
             backFromSettings: document.getElementById('back-from-settings'),
-            getKeyLink: document.getElementById('get-key-link')
+            getKeyLink: document.getElementById('get-key-link'),
+
+            // Backend selector
+            backendOpenrouter: document.getElementById('backend-openrouter'),
+            backendOllama: document.getElementById('backend-ollama'),
+            openrouterConfig: document.getElementById('openrouter-config'),
+            ollamaConfig: document.getElementById('ollama-config'),
+            ollamaUrlInput: document.getElementById('ollama-url-input'),
+            ollamaModelSelect: document.getElementById('ollama-model-select'),
+            refreshModelsBtn: document.getElementById('refresh-models-btn')
         };
     },
 
@@ -142,14 +179,15 @@ const UIController = {
         elements.retryBtn.addEventListener('click', () => this.startAnalysis());
         elements.fallbackBtn.addEventListener('click', () => this.setState('settings'));
         elements.closeError.addEventListener('click', () => this.setState('setup'));
+        elements.showDetailsBtn.addEventListener('click', () => this.toggleErrorDetails());
 
         // Cancel analysis
         elements.cancelAnalysis.addEventListener('click', () => this.cancelAnalysis());
 
         // Settings actions
-        elements.saveKeyBtn.addEventListener('click', () => this.saveApiKey());
+        elements.saveKeyBtn.addEventListener('click', () => this.saveSettings());
         elements.backFromSettings.addEventListener('click', () => {
-            if (OpenRouterClient.hasApiKey()) {
+            if (this.isBackendConfigured()) {
                 this.setState('setup');
             }
         });
@@ -161,9 +199,107 @@ const UIController = {
         // Enter key in API key input
         elements.apiKeyInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
-                this.saveApiKey();
+                this.saveSettings();
             }
         });
+
+        // Backend selector
+        elements.backendOpenrouter.addEventListener('click', () => this.selectBackend('openrouter'));
+        elements.backendOllama.addEventListener('click', () => this.selectBackend('ollama'));
+
+        // Ollama controls
+        elements.refreshModelsBtn.addEventListener('click', () => this.refreshOllamaModels());
+        elements.ollamaModelSelect.addEventListener('change', (e) => {
+            OllamaClient.setModel(e.target.value);
+        });
+    },
+
+    /**
+     * Select backend
+     */
+    selectBackend(backend) {
+        const { elements } = this;
+        this.currentBackend = backend;
+
+        // Update buttons
+        elements.backendOpenrouter.classList.toggle('active', backend === 'openrouter');
+        elements.backendOllama.classList.toggle('active', backend === 'ollama');
+
+        // Show/hide config panels
+        elements.openrouterConfig.classList.toggle('hidden', backend !== 'openrouter');
+        elements.ollamaConfig.classList.toggle('hidden', backend !== 'ollama');
+
+        // Save preference
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('autoclipper_backend', backend);
+        }
+
+        // If switching to Ollama, auto-detect models
+        if (backend === 'ollama') {
+            this.refreshOllamaModels();
+        }
+    },
+
+    /**
+     * Load saved backend preference
+     */
+    loadBackendPreference() {
+        if (typeof localStorage !== 'undefined') {
+            const saved = localStorage.getItem('autoclipper_backend');
+            if (saved === 'ollama') {
+                this.selectBackend('ollama');
+                // Load saved Ollama settings
+                const savedUrl = OllamaClient.getBaseUrl();
+                const savedModel = OllamaClient.getModel();
+                if (savedUrl) this.elements.ollamaUrlInput.value = savedUrl;
+                if (savedModel) {
+                    // Will be selected after model list loads
+                }
+            }
+        }
+    },
+
+    /**
+     * Refresh Ollama models list
+     */
+    async refreshOllamaModels() {
+        const { elements } = this;
+
+        // Update URL from input
+        OllamaClient.setBaseUrl(elements.ollamaUrlInput.value);
+
+        elements.refreshModelsBtn.textContent = 'Detectando...';
+        elements.refreshModelsBtn.disabled = true;
+
+        try {
+            const models = await OllamaClient.listModels();
+
+            elements.ollamaModelSelect.innerHTML = models.length === 0
+                ? '<option value="">-- No hay modelos --</option>'
+                : models.map(m => `<option value="${m.name}">${m.name}</option>`).join('');
+
+            // Select saved model if available
+            const savedModel = OllamaClient.getModel();
+            if (savedModel && models.some(m => m.name === savedModel)) {
+                elements.ollamaModelSelect.value = savedModel;
+            } else if (models.length > 0) {
+                // Auto-select first model
+                OllamaClient.setModel(models[0].name);
+            }
+
+            if (models.length === 0) {
+                elements.keyStatus.innerHTML = '<span style="color: var(--warning);">No hay modelos. Ejecuta: ollama pull qwen2.5:14b</span>';
+                elements.keyStatus.classList.remove('hidden');
+            }
+
+        } catch (error) {
+            elements.ollamaModelSelect.innerHTML = '<option value="">-- Error de conexion --</option>';
+            elements.keyStatus.innerHTML = '<span style="color: var(--danger);">Ollama no esta corriendo. Ejecuta: ollama serve</span>';
+            elements.keyStatus.classList.remove('hidden');
+        }
+
+        elements.refreshModelsBtn.textContent = 'Detectar modelos';
+        elements.refreshModelsBtn.disabled = false;
     },
 
     /**
@@ -178,43 +314,75 @@ const UIController = {
     },
 
     /**
-     * Save API key
+     * Save settings for current backend
      */
-    async saveApiKey() {
-        const key = this.elements.apiKeyInput.value.trim();
+    async saveSettings() {
+        const { elements } = this;
 
-        if (!key) {
-            return;
-        }
+        if (this.currentBackend === 'ollama') {
+            // Save Ollama settings
+            OllamaClient.setBaseUrl(elements.ollamaUrlInput.value);
+            const model = elements.ollamaModelSelect.value;
 
-        if (!key.startsWith('sk-or-')) {
-            this.elements.keyStatus.innerHTML = '<span style="color: var(--danger);">Key invalida (debe empezar con sk-or-)</span>';
-            this.elements.keyStatus.classList.remove('hidden');
-            return;
-        }
+            if (!model) {
+                elements.keyStatus.innerHTML = '<span style="color: var(--danger);">Selecciona un modelo primero</span>';
+                elements.keyStatus.classList.remove('hidden');
+                return;
+            }
 
-        OpenRouterClient.setApiKey(key);
+            OllamaClient.setModel(model);
 
-        // Test the key
-        this.elements.saveKeyBtn.textContent = 'Verificando...';
-        this.elements.saveKeyBtn.disabled = true;
+            // Test connection
+            elements.saveKeyBtn.textContent = 'Verificando...';
+            elements.saveKeyBtn.disabled = true;
 
-        const health = await OpenRouterClient.checkHealth();
+            const health = await OllamaClient.checkHealth();
 
-        this.elements.saveKeyBtn.textContent = 'Guardar';
-        this.elements.saveKeyBtn.disabled = false;
+            elements.saveKeyBtn.textContent = 'Guardar';
+            elements.saveKeyBtn.disabled = false;
 
-        if (health.ok) {
-            this.elements.keyStatus.innerHTML = '<span class="check-icon">&#10003;</span> <span>Conectado a Kimi K2</span>';
-            this.elements.keyStatus.classList.remove('hidden');
+            if (health.ok) {
+                elements.keyStatus.innerHTML = `<span class="check-icon">&#10003;</span> <span>${health.message}</span>`;
+                elements.keyStatus.classList.remove('hidden');
+                setTimeout(() => this.setState('setup'), 1000);
+            } else {
+                elements.keyStatus.innerHTML = `<span style="color: var(--danger);">${health.message}</span>`;
+                elements.keyStatus.classList.remove('hidden');
+            }
 
-            // Go to setup after short delay
-            setTimeout(() => {
-                this.setState('setup');
-            }, 1000);
         } else {
-            this.elements.keyStatus.innerHTML = `<span style="color: var(--danger);">${health.message}</span>`;
-            this.elements.keyStatus.classList.remove('hidden');
+            // Save OpenRouter settings
+            const key = elements.apiKeyInput.value.trim();
+
+            if (!key) {
+                return;
+            }
+
+            if (!key.startsWith('sk-or-')) {
+                elements.keyStatus.innerHTML = '<span style="color: var(--danger);">Key invalida (debe empezar con sk-or-)</span>';
+                elements.keyStatus.classList.remove('hidden');
+                return;
+            }
+
+            OpenRouterClient.setApiKey(key);
+
+            // Test the key
+            elements.saveKeyBtn.textContent = 'Verificando...';
+            elements.saveKeyBtn.disabled = true;
+
+            const health = await OpenRouterClient.checkHealth();
+
+            elements.saveKeyBtn.textContent = 'Guardar';
+            elements.saveKeyBtn.disabled = false;
+
+            if (health.ok) {
+                elements.keyStatus.innerHTML = `<span class="check-icon">&#10003;</span> <span>${health.message}</span>`;
+                elements.keyStatus.classList.remove('hidden');
+                setTimeout(() => this.setState('setup'), 1000);
+            } else {
+                elements.keyStatus.innerHTML = `<span style="color: var(--danger);">${health.message}</span>`;
+                elements.keyStatus.classList.remove('hidden');
+            }
         }
     },
 
@@ -258,12 +426,22 @@ const UIController = {
 
         this.currentState = state;
 
-        // Load current API key in settings
+        // Load current settings
         if (state === 'settings') {
+            // Load OpenRouter key
             const currentKey = OpenRouterClient.getApiKey();
             if (currentKey) {
                 this.elements.apiKeyInput.value = currentKey;
             }
+
+            // Load Ollama settings
+            const ollamaUrl = OllamaClient.getBaseUrl();
+            if (ollamaUrl) {
+                this.elements.ollamaUrlInput.value = ollamaUrl;
+            }
+
+            // Clear status
+            this.elements.keyStatus.classList.add('hidden');
         }
     },
 
@@ -315,12 +493,15 @@ const UIController = {
         }
     },
 
+    // Store last error for details view
+    _lastError: null,
+
     /**
      * Start analysis
      */
     async startAnalysis() {
-        // Check API key first
-        if (!OpenRouterClient.hasApiKey()) {
+        // Check configuration first
+        if (!this.isBackendConfigured()) {
             this.setState('settings');
             return;
         }
@@ -330,23 +511,47 @@ const UIController = {
         this.elements.momentsFound.textContent = '0 momentos encontrados';
         this.elements.momentsFound.style.color = ''; // Reset warning color
         this.elements.analysisStatus.textContent = 'Conectando con IA...';
+        this.elements.thinkingPreview.classList.add('hidden');
+        this.elements.thinkingText.textContent = '';
+        this.elements.tokensCount.textContent = '';
+
+        const client = this.getAIClient();
 
         try {
             // Analyze transcript
-            this.viralClips = await OpenRouterClient.analyzeTranscript(
+            this.viralClips = await client.analyzeTranscript(
                 this.segments,
                 {},
                 (progress) => {
+                    // Update progress bar
                     if (progress.progress !== undefined) {
                         this.elements.analysisProgress.style.width = `${progress.progress}%`;
                     }
+
+                    // Update status message
                     if (progress.message) {
                         this.elements.analysisStatus.textContent = progress.message;
                     }
+
+                    // Update moments found
                     if (progress.momentsFound !== undefined) {
                         this.elements.momentsFound.textContent =
                             `${progress.momentsFound} momentos encontrados`;
                     }
+
+                    // Show thinking preview (for reasoning models like DeepSeek R1)
+                    if (progress.thinking) {
+                        this.elements.thinkingPreview.classList.remove('hidden');
+                        this.elements.thinkingText.textContent = progress.thinking;
+                        // Auto-scroll to bottom
+                        this.elements.thinkingPreview.scrollTop = this.elements.thinkingPreview.scrollHeight;
+                    }
+
+                    // Show tokens count
+                    if (progress.tokensReceived !== undefined) {
+                        this.elements.tokensCount.textContent = `${progress.tokensReceived} tokens recibidos`;
+                    }
+
                     // Show context truncation warning if present
                     if (progress.warning) {
                         this.elements.momentsFound.textContent = progress.warning;
@@ -366,9 +571,34 @@ const UIController = {
             this.setState('review');
 
         } catch (error) {
+            this._lastError = error;
             this.elements.errorMessage.textContent = error.message;
+
+            // Prepare error details
+            if (error.rawResponse) {
+                this.elements.errorRaw.textContent = error.rawResponse.substring(0, 2000) +
+                    (error.rawResponse.length > 2000 ? '\n\n... (truncado)' : '');
+                this.elements.showDetailsBtn.classList.remove('hidden');
+            } else {
+                this.elements.showDetailsBtn.classList.add('hidden');
+            }
+
+            // Hide details by default
+            this.elements.errorDetails.classList.add('hidden');
+
             this.setState('error');
         }
+    },
+
+    /**
+     * Toggle error details visibility
+     */
+    toggleErrorDetails() {
+        const isHidden = this.elements.errorDetails.classList.contains('hidden');
+        this.elements.errorDetails.classList.toggle('hidden', !isHidden);
+        this.elements.showDetailsBtn.textContent = isHidden
+            ? 'Ocultar respuesta'
+            : 'Ver respuesta del modelo';
     },
 
     /**

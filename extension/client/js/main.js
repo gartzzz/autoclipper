@@ -96,16 +96,19 @@ function darken(color, amount) {
 }
 
 /**
- * Check connection to AutoClipper server
+ * Check connection to AI backend
  */
 async function checkServerConnection() {
-    const health = await OllamaClient.checkHealth();
+    // Get the configured backend from UIController
+    const backend = UIController.currentBackend || 'openrouter';
+    const client = backend === 'ollama' ? OllamaClient : OpenRouterClient;
+
+    const health = await client.checkHealth();
 
     if (!health.ok) {
-        console.warn('AutoClipper server not running:', health.message);
-        // Could show a warning in the UI
+        console.warn('AI backend not ready:', health.message);
     } else {
-        console.log('AutoClipper server connected');
+        console.log('AI backend connected:', health.message);
     }
 }
 
