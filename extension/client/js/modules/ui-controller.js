@@ -864,21 +864,27 @@ const UIController = {
 
             try {
                 // Call ExtendScript to create sequence
-                if (typeof csInterface !== 'undefined') {
-                    await new Promise((resolve, reject) => {
-                        csInterface.evalScript(
-                            `createSequenceFromClip(${JSON.stringify(JSON.stringify(clip))}, "${preset}")`,
-                            (result) => {
-                                if (result === 'error') {
-                                    reject(new Error('Failed to create sequence'));
-                                } else {
-                                    resolve(result);
-                                }
+                if (typeof csInterface !== 'undefined' && csInterface !== null) {
+                    const result = await new Promise((resolve, reject) => {
+                        const script = `createSequenceFromClip(${JSON.stringify(JSON.stringify(clip))}, "${preset}")`;
+                        console.log('[AutoClipper] Calling ExtendScript:', script);
+
+                        csInterface.evalScript(script, (result) => {
+                            console.log('[AutoClipper] ExtendScript result:', result);
+                            if (result && result.toString().startsWith('error')) {
+                                reject(new Error(result));
+                            } else if (result === 'EvalScript error.' || result === 'undefined') {
+                                reject(new Error('ExtendScript function not found - host script may not be loaded'));
+                            } else {
+                                resolve(result);
                             }
-                        );
+                        });
                     });
+
+                    console.log('[AutoClipper] Sequence created:', result);
                 } else {
                     // Simulate for testing
+                    console.log('[AutoClipper] Running in standalone mode - simulating');
                     await new Promise(r => setTimeout(r, 1000));
                 }
 
@@ -888,9 +894,10 @@ const UIController = {
                 item.querySelector('.subtitle').textContent = 'Completado';
 
             } catch (error) {
+                console.error('[AutoClipper] Error creating sequence:', error);
                 item.querySelector('.status-icon').textContent = '✗';
                 item.querySelector('.status-icon').className = 'status-icon error';
-                item.querySelector('.subtitle').textContent = 'Error';
+                item.querySelector('.subtitle').textContent = error.message || 'Error';
             }
 
             // Update progress

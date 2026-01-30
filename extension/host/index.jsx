@@ -176,14 +176,27 @@ function playClipRange(startTime, endTime) {
  * @returns {string} 'ok' or 'error'
  */
 function createSequenceFromClip(clipDataJSON, presetId) {
+    $.writeln('[AutoClipper] createSequenceFromClip called');
+    $.writeln('[AutoClipper] clipDataJSON: ' + clipDataJSON);
+    $.writeln('[AutoClipper] presetId: ' + presetId);
+
     var project = getProject();
-    if (!project) return 'error: No project open';
+    if (!project) {
+        $.writeln('[AutoClipper] ERROR: No project open');
+        return 'error: No project open';
+    }
 
     try {
         var clipData = JSON.parse(clipDataJSON);
+        $.writeln('[AutoClipper] Parsed clip data - startTime: ' + clipData.startTime + ', endTime: ' + clipData.endTime);
+
         var seq = getActiveSequence();
 
-        if (!seq) return 'error: No active sequence';
+        if (!seq) {
+            $.writeln('[AutoClipper] ERROR: No active sequence');
+            return 'error: No active sequence';
+        }
+        $.writeln('[AutoClipper] Active sequence: ' + seq.name);
 
         // Create a new sequence
         var seqName = clipData.suggestedTitle || 'AutoClip_' + Date.now();
@@ -269,11 +282,21 @@ function createSequenceFromClip(clipDataJSON, presetId) {
             }
 
             // Move sequence to AutoClipper bin
+            $.writeln('[AutoClipper] Moving sequence to AutoClipper bin...');
             var autoClipperBin = getOrCreateAutoClipperBin();
-            if (autoClipperBin && newSeq.projectItem) {
-                newSeq.projectItem.moveBin(autoClipperBin);
+            if (autoClipperBin) {
+                $.writeln('[AutoClipper] AutoClipper bin found/created: ' + autoClipperBin.name);
+                if (newSeq.projectItem) {
+                    newSeq.projectItem.moveBin(autoClipperBin);
+                    $.writeln('[AutoClipper] Sequence moved to bin successfully');
+                } else {
+                    $.writeln('[AutoClipper] WARNING: newSeq.projectItem is null');
+                }
+            } else {
+                $.writeln('[AutoClipper] WARNING: Could not create AutoClipper bin');
             }
 
+            $.writeln('[AutoClipper] Sequence creation completed successfully');
             return 'ok';
         }
 
@@ -395,3 +418,8 @@ function getProjectInfo() {
 
 // Log initialization
 $.writeln('AutoClipper ExtendScript loaded');
+
+// Simple test function to verify script is loaded
+function testExtendScript() {
+    return 'ExtendScript OK - ' + new Date().toISOString();
+}

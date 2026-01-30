@@ -20,7 +20,17 @@ function init() {
 
         // Load host script
         const extensionPath = csInterface.getSystemPath(SystemPath.EXTENSION);
-        csInterface.evalScript(`$.evalFile("${extensionPath}/host/index.jsx")`);
+        // Escape backslashes for Windows paths and use forward slashes
+        const hostPath = (extensionPath + '/host/index.jsx').replace(/\\/g, '/');
+        console.log('[AutoClipper] Loading host script from:', hostPath);
+
+        csInterface.evalScript(`$.evalFile("${hostPath}")`, (result) => {
+            if (result === 'EvalScript error.') {
+                console.error('[AutoClipper] Failed to load host script');
+            } else {
+                console.log('[AutoClipper] Host script loaded successfully');
+            }
+        });
 
         console.log('AutoClipper initialized in Premiere Pro');
     } else {
