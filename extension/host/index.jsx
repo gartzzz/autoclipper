@@ -460,6 +460,16 @@ function getProjectInfo() {
 // Log initialization
 $.writeln('AutoClipper ExtendScript loaded');
 
+// Try to enable QE DOM for playback control
+try {
+    if (typeof app !== 'undefined' && app.enableQE) {
+        app.enableQE();
+        $.writeln('AutoClipper: QE DOM enabled');
+    }
+} catch (qeErr) {
+    $.writeln('AutoClipper: QE DOM not available - ' + qeErr.message);
+}
+
 // Simple test function to verify script is loaded
 function testExtendScript() {
     return 'ExtendScript OK - ' + new Date().toISOString();

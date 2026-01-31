@@ -287,6 +287,24 @@
                 </div>
             </div>
         </section>
+        <!-- Debug Panel -->
+        <div id="debug-panel" class="debug-panel">
+            <div class="debug-header" onclick="document.getElementById('debug-panel').classList.toggle('collapsed')">
+                <span>Debug</span>
+                <span id="debug-status" class="debug-indicator">●</span>
+            </div>
+            <div class="debug-content">
+                <div class="debug-row">
+                    <span class="debug-label">ExtendScript:</span>
+                    <span id="jsx-status">Cargando...</span>
+                </div>
+                <div class="debug-row">
+                    <span class="debug-label">Ruta:</span>
+                    <span id="jsx-path">-</span>
+                </div>
+                <div id="debug-log" class="debug-log"></div>
+            </div>
+        </div>
     </div>
 
     <script src="js/lib/CSInterface.js"></script>

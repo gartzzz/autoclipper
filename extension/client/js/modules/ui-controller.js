@@ -774,10 +774,48 @@ const UIController = {
         const clip = this.viralClips[this.currentClipIndex];
         if (!clip) return;
 
+        // Check if host script is loaded
+        if (typeof isHostScriptLoaded === 'function' && !isHostScriptLoaded()) {
+            console.warn('[AutoClipper] Cannot replay: host script not loaded');
+            this.addDebugLog('Replay bloqueado: ExtendScript no cargado');
+            return;
+        }
+
         // Call ExtendScript to set playhead and play
         if (typeof csInterface !== 'undefined') {
-            csInterface.evalScript(`playClipRange(${clip.startTime}, ${clip.endTime})`);
+            csInterface.evalScript(`playClipRange(${clip.startTime}, ${clip.endTime})`, (result) => {
+                console.log('[AutoClipper] playClipRange result:', result);
+                this.addDebugLog(`playClipRange: ${result}`);
+            });
         }
+    },
+
+    /**
+     * Add message to debug log
+     */
+    addDebugLog(message) {
+        const logEl = document.getElementById('debug-log');
+        if (logEl) {
+            const time = new Date().toLocaleTimeString();
+            logEl.textContent = `[${time}] ${message}\n` + logEl.textContent;
+            // Keep only last 20 lines
+            const lines = logEl.textContent.split('\n').slice(0, 20);
+            logEl.textContent = lines.join('\n');
+        }
+    },
+
+    /**
+     * Show error when host script fails to load
+     */
+    showHostScriptError(path) {
+        // Add error banner at top
+        const banner = document.createElement('div');
+        banner.className = 'host-error-banner';
+        banner.innerHTML = `ExtendScript no cargado. Funciones de Premiere deshabilitadas.`;
+        document.body.insertBefore(banner, document.body.firstChild);
+
+        // Update debug panel
+        this.addDebugLog(`ERROR: No se pudo cargar ${path}`);
     },
 
     /**
@@ -836,6 +874,13 @@ const UIController = {
      * Start generating sequences
      */
     async startGeneration() {
+        // Check if host script is loaded
+        if (typeof isHostScriptLoaded === 'function' && !isHostScriptLoaded()) {
+            alert('Error: ExtendScript no esta cargado.\n\nLas funciones de Premiere no estan disponibles.\nRevisa el panel de Debug para mas informacion.');
+            this.addDebugLog('Generacion bloqueada: ExtendScript no cargado');
+            return;
+        }
+
         this.setState('generating');
         this.elements.generationProgress.style.width = '0%';
 
