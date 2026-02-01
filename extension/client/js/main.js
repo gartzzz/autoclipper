@@ -6,14 +6,107 @@
 // CSInterface instance
 let csInterface = null;
 
-// Global state for ExtendScript
-let hostScriptLoaded = false;
-let hostScriptPath = '';
+/**
+ * Debug Logger - logs to both console and UI panel
+ */
+const DebugLogger = {
+    _logsContainer: null,
+    _maxLogs: 100,
+
+    init() {
+        this._logsContainer = document.getElementById('debug-logs');
+        const toggleBtn = document.getElementById('debug-toggle');
+        const closeBtn = document.getElementById('debug-close');
+        const clearBtn = document.getElementById('debug-clear');
+        const panel = document.getElementById('debug-panel');
+
+        toggleBtn?.addEventListener('click', () => {
+            panel?.classList.toggle('hidden');
+            toggleBtn.classList.toggle('active', !panel?.classList.contains('hidden'));
+        });
+
+        closeBtn?.addEventListener('click', () => {
+            panel?.classList.add('hidden');
+            toggleBtn?.classList.remove('active');
+        });
+
+        clearBtn?.addEventListener('click', () => this.clear());
+
+        // Override console methods to capture logs
+        this._hookConsole();
+    },
+
+    _hookConsole() {
+        const originalLog = console.log;
+        const originalWarn = console.warn;
+        const originalError = console.error;
+
+        console.log = (...args) => {
+            originalLog.apply(console, args);
+            this.log('info', args.join(' '));
+        };
+
+        console.warn = (...args) => {
+            originalWarn.apply(console, args);
+            this.log('warn', args.join(' '));
+        };
+
+        console.error = (...args) => {
+            originalError.apply(console, args);
+            this.log('error', args.join(' '));
+        };
+    },
+
+    log(level, message) {
+        if (!this._logsContainer) return;
+
+        const entry = document.createElement('div');
+        entry.className = `debug-log ${level}`;
+
+        const time = new Date().toLocaleTimeString('en-US', {
+            hour12: false,
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+
+        entry.innerHTML = `<span class="timestamp">${time}</span>${this._escapeHtml(message)}`;
+
+        this._logsContainer.appendChild(entry);
+
+        // Remove old logs if too many
+        while (this._logsContainer.children.length > this._maxLogs) {
+            this._logsContainer.removeChild(this._logsContainer.firstChild);
+        }
+
+        // Auto-scroll to bottom
+        this._logsContainer.scrollTop = this._logsContainer.scrollHeight;
+    },
+
+    _escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    },
+
+    clear() {
+        if (this._logsContainer) {
+            this._logsContainer.innerHTML = '';
+        }
+    },
+
+    success(message) {
+        this.log('success', message);
+    }
+};
 
 /**
  * Initialize the extension
  */
 function init() {
+    // Initialize Debug Logger first
+    DebugLogger.init();
+
     // Initialize CSInterface if available (running in Premiere)
     if (typeof CSInterface !== 'undefined') {
         csInterface = new CSInterface();
@@ -22,168 +115,156 @@ function init() {
         updateTheme();
         csInterface.addEventListener(CSInterface.THEME_COLOR_CHANGED_EVENT, updateTheme);
 
-        // Load host script with robust path handling
-        loadHostScript();
+        // Get paths
+        const extensionPath = csInterface.getSystemPath(SystemPath.EXTENSION);
+        const hostPath = (extensionPath + '/host/index.jsx').replace(/\\/g, '/');
+        console.log('[AutoClipper] Extension path:', extensionPath);
+        console.log('[AutoClipper] Host script path:', hostPath);
+
+        // STEP 1: Test basic ExtendScript connectivity
+        console.log('[AutoClipper] Step 1: Testing ExtendScript engine...');
+        csInterface.evalScript('1+1', (basicResult) => {
+            console.log('[AutoClipper] Basic eval (1+1):', basicResult);
+
+            if (basicResult === 'EvalScript error.' || basicResult === undefined) {
+                console.error('[AutoClipper] CRITICAL: ExtendScript engine not responding!');
+                console.error('[AutoClipper] This usually means:');
+                console.error('  1. Premiere needs restart');
+                console.error('  2. Another extension crashed the engine');
+                console.error('  3. CEP debug mode issue - check PlayerDebugMode registry');
+                showEngineError();
+                return;
+            }
+
+            // STEP 2: Check if script already loaded (from ScriptPath in manifest)
+            console.log('[AutoClipper] Step 2: Checking if already loaded...');
+            csInterface.evalScript('typeof _autoClipperLoaded', (preCheck) => {
+                console.log('[AutoClipper] _autoClipperLoaded type:', preCheck);
+
+                if (preCheck === 'boolean') {
+                    console.log('[AutoClipper] ✓ Script was auto-loaded by CEP');
+                    verifyAndReport();
+                    return;
+                }
+
+                // STEP 3: Try loading manually
+                console.log('[AutoClipper] Step 3: Loading script manually...');
+                loadScriptManually(hostPath);
+            });
+        });
+
+        function loadScriptManually(path) {
+            // Try $.evalFile first
+            csInterface.evalScript(`$.evalFile("${path}")`, (result) => {
+                console.log('[AutoClipper] $.evalFile result:', result);
+
+                csInterface.evalScript('typeof _autoClipperLoaded', (loadCheck) => {
+                    if (loadCheck === 'boolean') {
+                        console.log('[AutoClipper] ✓ Script loaded via $.evalFile');
+                        verifyAndReport();
+                        return;
+                    }
+
+                    // Try File read + eval
+                    console.log('[AutoClipper] $.evalFile failed, trying File.read...');
+                    const script = `
+                        (function() {
+                            try {
+                                var f = new File("${path}");
+                                if (!f.exists) return "FILE_NOT_FOUND:" + f.fsName;
+                                f.encoding = "UTF-8";
+                                f.open("r");
+                                var content = f.read();
+                                f.close();
+                                if (!content) return "FILE_EMPTY";
+                                eval(content);
+                                return typeof _autoClipperLoaded === 'boolean' ? "LOADED" : "EVAL_OK_BUT_NO_MARKER";
+                            } catch(e) {
+                                return "ERROR:" + e.message + " LINE:" + e.line;
+                            }
+                        })()
+                    `;
+                    csInterface.evalScript(script, (fileResult) => {
+                        console.log('[AutoClipper] File.read result:', fileResult);
+
+                        if (fileResult === 'LOADED') {
+                            console.log('[AutoClipper] ✓ Script loaded via File.read');
+                            verifyAndReport();
+                        } else if (fileResult && fileResult.startsWith('FILE_NOT_FOUND')) {
+                            console.error('[AutoClipper] ✗ File not found at path');
+                            console.error('[AutoClipper] Path:', fileResult.split(':')[1]);
+                        } else if (fileResult && fileResult.startsWith('ERROR')) {
+                            console.error('[AutoClipper] ✗ JSX syntax error:');
+                            console.error('[AutoClipper]', fileResult);
+                        } else {
+                            console.error('[AutoClipper] ✗ Unknown load failure:', fileResult);
+                            verifyAndReport(); // Try anyway
+                        }
+                    });
+                });
+            });
+        }
+
+        function verifyAndReport() {
+            // Run diagnostic
+            csInterface.evalScript('acDiagnose()', (diagResult) => {
+                console.log('[AutoClipper] Diagnostics:', diagResult);
+
+                try {
+                    const diag = JSON.parse(diagResult);
+                    console.log('[AutoClipper] ExtendScript version:', diag.extendScriptVersion);
+                    console.log('[AutoClipper] App:', diag.appName, diag.appVersion);
+                    console.log('[AutoClipper] Has project:', diag.hasProject);
+                } catch (e) {
+                    console.log('[AutoClipper] Could not parse diagnostics');
+                }
+            });
+
+            // Verify main functions
+            csInterface.evalScript('typeof createSequenceFromClip', (typeResult) => {
+                console.log('[AutoClipper] createSequenceFromClip type:', typeResult);
+
+                if (typeResult === 'function') {
+                    console.log('[AutoClipper] ✓ All functions loaded successfully!');
+                    csInterface.evalScript('testExtendScript()', (testResult) => {
+                        console.log('[AutoClipper] Test:', testResult);
+                    });
+                } else {
+                    console.error('[AutoClipper] ✗ Functions not available');
+                    console.error('[AutoClipper] Check ESTK console for syntax errors');
+                }
+            });
+        }
+
+        function showEngineError() {
+            const statusEl = document.getElementById('jsx-status');
+            if (statusEl) {
+                statusEl.textContent = '✗ ExtendScript engine not responding';
+                statusEl.style.color = '#f87171';
+            }
+        }
 
         console.log('AutoClipper initialized in Premiere Pro');
+
+        // Listen for panel close to cleanup
+        csInterface.addEventListener('com.adobe.csxs.events.WindowVisibilityChanged', function(event) {
+            if (event.data === 'false') {
+                handlePanelClose();
+            }
+        });
+
     } else {
         console.log('AutoClipper running in standalone mode (for development)');
-        hostScriptLoaded = false;
     }
+
+    // Also handle browser unload
+    window.addEventListener('beforeunload', handlePanelClose);
 
     // Initialize UI controller
     UIController.init();
 
     // Check server connection
     checkServerConnection();
-}
-
-/**
- * Load ExtendScript host with multiple fallback methods
- */
-function loadHostScript() {
-    const extensionPath = csInterface.getSystemPath(SystemPath.EXTENSION);
-    hostScriptPath = extensionPath + '/host/index.jsx';
-
-    console.log('[AutoClipper] Extension path:', extensionPath);
-    console.log('[AutoClipper] Host script path:', hostScriptPath);
-
-    // Try multiple methods to load the script
-    tryLoadMethod1();
-}
-
-/**
- * Method 1: Forward slashes (works on most systems)
- */
-function tryLoadMethod1() {
-    const pathForward = hostScriptPath.replace(/\\/g, '/');
-    console.log('[AutoClipper] Method 1 - Forward slashes:', pathForward);
-
-    csInterface.evalScript(`$.evalFile("${pathForward}")`, (result) => {
-        console.log('[AutoClipper] Method 1 result:', result);
-        verifyScriptLoaded((loaded) => {
-            if (loaded) {
-                console.log('[AutoClipper] ✓ Method 1 succeeded');
-                onHostScriptLoaded();
-            } else {
-                console.log('[AutoClipper] Method 1 failed, trying Method 2...');
-                tryLoadMethod2();
-            }
-        });
-    });
-}
-
-/**
- * Method 2: Double backslashes (Windows escape)
- */
-function tryLoadMethod2() {
-    const pathEscaped = hostScriptPath.replace(/\\/g, '\\\\');
-    console.log('[AutoClipper] Method 2 - Escaped backslashes:', pathEscaped);
-
-    csInterface.evalScript(`$.evalFile("${pathEscaped}")`, (result) => {
-        console.log('[AutoClipper] Method 2 result:', result);
-        verifyScriptLoaded((loaded) => {
-            if (loaded) {
-                console.log('[AutoClipper] ✓ Method 2 succeeded');
-                onHostScriptLoaded();
-            } else {
-                console.log('[AutoClipper] Method 2 failed, trying Method 3...');
-                tryLoadMethod3();
-            }
-        });
-    });
-}
-
-/**
- * Method 3: File URI protocol
- */
-function tryLoadMethod3() {
-    // Convert to file:// URI
-    let fileUri = 'file:///' + hostScriptPath.replace(/\\/g, '/');
-    // Encode special characters but not slashes
-    fileUri = fileUri.replace(/ /g, '%20');
-    console.log('[AutoClipper] Method 3 - File URI:', fileUri);
-
-    csInterface.evalScript(`$.evalFile("${fileUri}")`, (result) => {
-        console.log('[AutoClipper] Method 3 result:', result);
-        verifyScriptLoaded((loaded) => {
-            if (loaded) {
-                console.log('[AutoClipper] ✓ Method 3 succeeded');
-                onHostScriptLoaded();
-            } else {
-                console.log('[AutoClipper] All methods failed');
-                onHostScriptFailed();
-            }
-        });
-    });
-}
-
-/**
- * Verify script is actually loaded by calling test function
- */
-function verifyScriptLoaded(callback) {
-    csInterface.evalScript('testExtendScript()', (result) => {
-        const loaded = result && result.includes && result.includes('ExtendScript OK');
-        callback(loaded);
-    });
-}
-
-/**
- * Called when host script loads successfully
- */
-function onHostScriptLoaded() {
-    hostScriptLoaded = true;
-    console.log('[AutoClipper] ✓ ExtendScript loaded and verified');
-    updateDebugStatus(true, 'Cargado');
-
-    // Enable QE DOM for playback control
-    csInterface.evalScript('app.enableQE()', (result) => {
-        console.log('[AutoClipper] QE DOM enabled:', result);
-    });
-}
-
-/**
- * Called when host script fails to load
- */
-function onHostScriptFailed() {
-    hostScriptLoaded = false;
-    console.error('[AutoClipper] ✗ ExtendScript failed to load');
-    console.error('[AutoClipper] Attempted path:', hostScriptPath);
-    updateDebugStatus(false, 'Error: No se pudo cargar');
-
-    // Show error to user
-    if (typeof UIController !== 'undefined' && UIController.showHostScriptError) {
-        UIController.showHostScriptError(hostScriptPath);
-    }
-}
-
-/**
- * Update debug panel status
- */
-function updateDebugStatus(loaded, message) {
-    const statusEl = document.getElementById('jsx-status');
-    const pathEl = document.getElementById('jsx-path');
-    const indicatorEl = document.getElementById('debug-status');
-
-    if (statusEl) {
-        statusEl.textContent = loaded ? '✓ ' + message : '✗ ' + message;
-        statusEl.style.color = loaded ? '#4ade80' : '#f87171';
-    }
-    if (pathEl) {
-        pathEl.textContent = hostScriptPath;
-        pathEl.style.fontSize = '10px';
-        pathEl.style.wordBreak = 'break-all';
-    }
-    if (indicatorEl) {
-        indicatorEl.style.color = loaded ? '#4ade80' : '#f87171';
-    }
-}
-
-/**
- * Check if host script is loaded (for other modules to use)
- */
-function isHostScriptLoaded() {
-    return hostScriptLoaded;
 }
 
 /**
@@ -284,6 +365,29 @@ function evalScript(script) {
             }
         });
     });
+}
+
+/**
+ * Handle panel close - cleanup resources
+ */
+function handlePanelClose() {
+    console.log('[AutoClipper] Panel closing, cleaning up...');
+
+    // Check if keep-warm is active
+    if (UIController._isKeepWarmActive) {
+        // Clear the interval
+        if (UIController._keepWarmInterval) {
+            clearInterval(UIController._keepWarmInterval);
+            UIController._keepWarmInterval = null;
+        }
+        UIController._isKeepWarmActive = false;
+
+        // Ask user if they want to unload the model
+        // Note: confirm() may not work on panel close, so we just unload
+        // If you want to keep it loaded, comment out the next line
+        OllamaClient.unloadModel();
+        console.log('[AutoClipper] Model unloaded from GPU');
+    }
 }
 
 // Initialize when DOM is ready

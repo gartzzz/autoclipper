@@ -83,6 +83,73 @@ const OllamaClient = {
     },
 
     /**
+     * Check if the model is currently loaded in GPU memory
+     * Uses /api/ps endpoint to see running models
+     */
+    async isModelLoaded() {
+        try {
+            const response = await fetch(`${this.getBaseUrl()}/api/ps`);
+            if (!response.ok) return false;
+
+            const data = await response.json();
+            const model = this.getModel();
+            if (!model) return false;
+
+            // Check if our model is in the list of running models
+            return data.models?.some(m => m.name.startsWith(model)) || false;
+        } catch {
+            return false;
+        }
+    },
+
+    /**
+     * Keep the model warm (loaded in GPU) by sending a minimal request
+     * Sets keep_alive to 30 minutes
+     */
+    async keepWarm() {
+        const model = this.getModel();
+        if (!model) return false;
+
+        try {
+            await fetch(`${this.getBaseUrl()}/api/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: model,
+                    prompt: '',
+                    keep_alive: '30m'  // Keep loaded for 30 minutes
+                })
+            });
+            return true;
+        } catch {
+            return false;
+        }
+    },
+
+    /**
+     * Unload the model from GPU memory immediately
+     * Sets keep_alive to 0 which triggers immediate unload
+     */
+    async unloadModel() {
+        const model = this.getModel();
+        if (!model) return;
+
+        try {
+            await fetch(`${this.getBaseUrl()}/api/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: model,
+                    prompt: '',
+                    keep_alive: 0  // 0 = unload immediately
+                })
+            });
+        } catch {
+            // Ignore errors when unloading
+        }
+    },
+
+    /**
      * List available models
      */
     async listModels() {
@@ -162,14 +229,14 @@ const OllamaClient = {
         const {
             minClipDuration = 15,
             maxClipDuration = 90,
-            targetCount = 10,
+            minViralScore = 70,  // Quality threshold instead of fixed count
             contentType = 'general'
         } = options;
 
         const systemPrompt = this.getSystemPrompt();
         const transcript = this.formatTranscript(segments);
         const userPrompt = this.buildUserPrompt(transcript, {
-            targetCount,
+            minViralScore,
             minDuration: minClipDuration,
             maxDuration: maxClipDuration,
             contentType
@@ -453,15 +520,17 @@ You MUST respond with valid JSON only. No explanations outside the JSON.`;
      * Build user prompt
      */
     buildUserPrompt(transcript, options) {
-        return `Analyze this transcript and find the most viral-worthy moments.
+        return `Analyze this transcript and find ALL viral-worthy moments.
 
 TRANSCRIPT:
 ${transcript}
 
 REQUIREMENTS:
-- Find ${options.targetCount} clips between ${options.minDuration} and ${options.maxDuration} seconds
+- Find ALL clips with viralScore >= ${options.minViralScore}
+- Clip duration: ${options.minDuration} to ${options.maxDuration} seconds
 - Each clip must make sense as standalone content
-- Prioritize by viralScore, not chronological order
+- Prioritize by viralScore (highest first)
+- Do NOT include clips below ${options.minViralScore} score
 
 Respond with a JSON array of clips. Each clip must have:
 - startTime: number (seconds from transcript timestamps)
@@ -481,36 +550,47 @@ Return ONLY the JSON array, no other text.`;
         try {
             const jsonMatch = response.match(/\[[\s\S]*\]/);
             if (!jsonMatch) {
-                console.warn('No JSON array found in response');
+                console.warn('[AutoClipper] No JSON array found in response');
                 return [];
             }
 
             const parsed = JSON.parse(jsonMatch[0]);
+            console.log('[AutoClipper] Raw parsed clips:', parsed);
 
             if (!Array.isArray(parsed)) {
+                console.warn('[AutoClipper] Parsed result is not an array');
                 return [];
             }
 
             return parsed
-                .filter(clip =>
-                    typeof clip.startTime === 'number' &&
-                    typeof clip.endTime === 'number' &&
-                    typeof clip.viralScore === 'number'
-                )
-                .map(clip => ({
-                    startTime: clip.startTime,
-                    endTime: clip.endTime,
-                    text: clip.text || '',
-                    viralScore: Math.min(100, Math.max(0, clip.viralScore)),
-                    factors: clip.factors || {},
-                    hookSuggestion: clip.hookSuggestion || '',
-                    suggestedTitle: clip.suggestedTitle || 'Untitled Clip',
-                    hashtags: Array.isArray(clip.hashtags) ? clip.hashtags : [],
-                    reasoning: clip.reasoning || ''
-                }));
+                .map(clip => {
+                    // Convert to numbers (handles both strings and numbers)
+                    const startTime = parseFloat(clip.startTime);
+                    const endTime = parseFloat(clip.endTime);
+                    const viralScore = parseFloat(clip.viralScore);
+
+                    // Validate after conversion
+                    if (isNaN(startTime) || isNaN(endTime) || isNaN(viralScore)) {
+                        console.warn('[AutoClipper] Skipping invalid clip:', clip);
+                        return null;
+                    }
+
+                    return {
+                        startTime,
+                        endTime,
+                        text: clip.text || '',
+                        viralScore: Math.min(100, Math.max(0, viralScore)),
+                        factors: clip.factors || {},
+                        hookSuggestion: clip.hookSuggestion || '',
+                        suggestedTitle: clip.suggestedTitle || 'Untitled Clip',
+                        hashtags: Array.isArray(clip.hashtags) ? clip.hashtags : [],
+                        reasoning: clip.reasoning || ''
+                    };
+                })
+                .filter(clip => clip !== null);  // Remove invalid clips
 
         } catch (error) {
-            console.error('Failed to parse clips:', error);
+            console.error('[AutoClipper] Failed to parse clips:', error);
             return [];
         }
     },
@@ -520,13 +600,26 @@ Return ONLY the JSON array, no other text.`;
      */
     isValidClip(clip, options) {
         const duration = clip.endTime - clip.startTime;
-        return (
+        const isValid = (
             duration >= options.minClipDuration &&
             duration <= options.maxClipDuration &&
             clip.viralScore >= 55 &&
             clip.startTime >= 0 &&
             clip.endTime > clip.startTime
         );
+
+        if (!isValid) {
+            console.log('[AutoClipper] Clip rejected:', {
+                title: clip.suggestedTitle,
+                duration: duration.toFixed(1) + 's',
+                score: clip.viralScore,
+                reason: duration < options.minClipDuration ? 'too short' :
+                        duration > options.maxClipDuration ? 'too long' :
+                        clip.viralScore < 55 ? 'low score' : 'invalid times'
+            });
+        }
+
+        return isValid;
     },
 
     /**

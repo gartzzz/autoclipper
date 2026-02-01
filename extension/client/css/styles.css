@@ -233,6 +233,28 @@ body {
     color: var(--text-primary);
 }
 
+/* Source Reminder */
+.source-reminder {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    margin: 12px 0;
+    background: rgba(255, 187, 51, 0.15);
+    border: 1px solid var(--warning);
+    border-radius: var(--radius);
+    font-size: 11px;
+    color: var(--warning);
+}
+
+.source-reminder .reminder-icon {
+    font-size: 14px;
+}
+
+.source-reminder strong {
+    color: #fff;
+}
+
 /* Review State */
 .clip-counter {
     color: var(--text-secondary);
@@ -833,9 +855,62 @@ body {
     text-decoration: underline;
 }
 
-/* Utilities */
-.hidden {
-    display: none !important;
+/* Model Status Indicator */
+.model-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+    font-size: 11px;
+}
+
+.model-status.hidden {
+    display: none;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+}
+
+.status-dot.loaded {
+    background: var(--success);
+    box-shadow: 0 0 6px var(--success);
+}
+
+.status-dot.loading {
+    background: var(--warning);
+    animation: pulse 1s ease-in-out infinite;
+}
+
+.power-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.power-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.power-btn.active {
+    color: var(--success);
 }
 
 /* Debug Panel */
@@ -844,10 +919,16 @@ body {
     bottom: 0;
     left: 0;
     right: 0;
-    background: #1a1a1a;
+    height: 200px;
+    background: var(--bg-secondary);
     border-top: 1px solid var(--border);
-    font-size: 10px;
     z-index: 1000;
+    display: flex;
+    flex-direction: column;
+}
+
+.debug-panel.hidden {
+    display: none;
 }
 
 .debug-header {
@@ -855,68 +936,105 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 6px 12px;
-    background: #0d0d0d;
+    background: var(--bg-tertiary);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.debug-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
     cursor: pointer;
-    color: var(--text-secondary);
+    font-size: 16px;
+    padding: 0 4px;
 }
 
-.debug-header:hover {
-    background: #151515;
+.debug-close:hover {
+    color: var(--text-primary);
 }
 
-.debug-indicator {
-    font-size: 8px;
-}
-
-.debug-content {
-    padding: 8px 12px;
-    max-height: 120px;
+.debug-logs {
+    flex: 1;
     overflow-y: auto;
-}
-
-.debug-panel.collapsed .debug-content {
-    display: none;
-}
-
-.debug-row {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 4px;
-}
-
-.debug-label {
-    color: var(--text-secondary);
-    min-width: 80px;
+    padding: 8px 12px;
+    font-family: monospace;
+    font-size: 10px;
+    line-height: 1.4;
 }
 
 .debug-log {
-    margin-top: 8px;
-    padding: 6px;
-    background: var(--bg-secondary);
-    border-radius: 3px;
-    font-family: monospace;
-    font-size: 9px;
+    margin-bottom: 4px;
+    padding: 2px 4px;
+    border-radius: 2px;
+}
+
+.debug-log.info {
     color: var(--text-secondary);
-    max-height: 60px;
-    overflow-y: auto;
-    white-space: pre-wrap;
 }
 
-/* Host Script Error Banner */
-.host-error-banner {
+.debug-log.success {
+    color: var(--success);
+}
+
+.debug-log.warn {
+    color: var(--warning);
+    background: rgba(255, 187, 51, 0.1);
+}
+
+.debug-log.error {
+    color: var(--danger);
+    background: rgba(255, 68, 68, 0.1);
+}
+
+.debug-log .timestamp {
+    color: var(--text-secondary);
+    margin-right: 8px;
+}
+
+.debug-clear-btn {
+    background: var(--bg-tertiary);
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 6px 12px;
+    font-size: 10px;
+}
+
+.debug-clear-btn:hover {
+    background: var(--border);
+    color: var(--text-primary);
+}
+
+.debug-toggle {
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    background: var(--danger);
-    color: white;
-    padding: 8px 12px;
+    bottom: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    cursor: pointer;
     font-size: 11px;
-    text-align: center;
-    z-index: 1001;
+    font-weight: 600;
+    z-index: 999;
+    transition: all 0.2s;
 }
 
-.host-error-banner a {
+.debug-toggle:hover {
+    background: var(--accent);
     color: white;
-    text-decoration: underline;
+    border-color: var(--accent);
+}
+
+.debug-toggle.active {
+    background: var(--accent);
+    color: white;
+}
+
+/* Utilities */
+.hidden {
+    display: none !important;
 }

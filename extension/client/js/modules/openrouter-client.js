@@ -112,14 +112,14 @@ const OpenRouterClient = {
         const {
             minClipDuration = 15,
             maxClipDuration = 90,
-            targetCount = 10,
+            minViralScore = 70,  // Quality threshold instead of fixed count
             contentType = 'general'
         } = options;
 
         // Build prompts and check context limit
         const systemPrompt = this.getSystemPrompt();
         const promptOptions = {
-            targetCount,
+            minViralScore,
             minDuration: minClipDuration,
             maxDuration: maxClipDuration,
             contentType
@@ -330,15 +330,17 @@ You MUST respond with valid JSON only. No explanations outside the JSON.`;
      * Build user prompt
      */
     buildUserPrompt(transcript, options) {
-        return `Analyze this transcript and find the most viral-worthy moments.
+        return `Analyze this transcript and find ALL viral-worthy moments.
 
 TRANSCRIPT:
 ${transcript}
 
 REQUIREMENTS:
-- Find ${options.targetCount} clips between ${options.minDuration} and ${options.maxDuration} seconds
+- Find ALL clips with viralScore >= ${options.minViralScore}
+- Clip duration: ${options.minDuration} to ${options.maxDuration} seconds
 - Each clip must make sense as standalone content
-- Prioritize by viralScore (calculated from weighted factors), not chronological order
+- Prioritize by viralScore (highest first)
+- Do NOT include clips below ${options.minViralScore} score
 - Look for raw/unfiltered moments - personality and slang are a PLUS
 
 Respond with a JSON array of clips. Each clip must have:

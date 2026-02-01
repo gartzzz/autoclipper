@@ -3,85 +3,162 @@
  * Premiere Pro automation functions
  */
 
+// CRITICAL: Wrap everything in try-catch to prevent engine corruption
+try {
+    // LOAD MARKER - If this runs, the file is being parsed
+    var _autoClipperLoaded = true;
+    $.writeln('[AutoClipper JSX] Script file is being parsed...');
+} catch (initErr) {
+    $.writeln('[AutoClipper JSX] INIT ERROR: ' + initErr.message);
+}
+
 // Polyfill for JSON if not available
 if (typeof JSON === 'undefined') {
-    JSON = {
-        parse: function(str) { return eval('(' + str + ')'); },
-        stringify: function(obj) {
-            if (obj === null) return 'null';
-            if (typeof obj === 'undefined') return undefined;
-            if (typeof obj === 'number' || typeof obj === 'boolean') return String(obj);
-            if (typeof obj === 'string') return '"' + obj.replace(/"/g, '\\"') + '"';
-            if (obj instanceof Array) {
-                var arr = [];
-                for (var i = 0; i < obj.length; i++) {
-                    arr.push(JSON.stringify(obj[i]));
-                }
-                return '[' + arr.join(',') + ']';
-            }
-            if (typeof obj === 'object') {
-                var pairs = [];
-                for (var key in obj) {
-                    if (obj.hasOwnProperty(key)) {
-                        pairs.push('"' + key + '":' + JSON.stringify(obj[key]));
-                    }
-                }
-                return '{' + pairs.join(',') + '}';
-            }
-            return String(obj);
+    JSON = {};
+    JSON.parse = function(str) {
+        try {
+            return eval('(' + str + ')');
+        } catch (e) {
+            return null;
         }
+    };
+    JSON.stringify = function(obj) {
+        if (obj === null) return 'null';
+        if (typeof obj === 'undefined') return 'undefined';
+        if (typeof obj === 'number' || typeof obj === 'boolean') return String(obj);
+        if (typeof obj === 'string') return '"' + obj.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r') + '"';
+        if (obj instanceof Array) {
+            var arr = [];
+            for (var i = 0; i < obj.length; i++) {
+                arr.push(JSON.stringify(obj[i]));
+            }
+            return '[' + arr.join(',') + ']';
+        }
+        if (typeof obj === 'object') {
+            var pairs = [];
+            for (var key in obj) {
+                if (obj.hasOwnProperty(key)) {
+                    pairs.push('"' + key + '":' + JSON.stringify(obj[key]));
+                }
+            }
+            return '{' + pairs.join(',') + '}';
+        }
+        return String(obj);
     };
 }
 
 /**
+ * Simple diagnostic function - call this first to verify ExtendScript works
+ */
+function acDiagnose() {
+    try {
+        var result = {
+            extendScriptVersion: $.version,
+            appName: typeof app !== 'undefined' ? app.name : 'N/A',
+            appVersion: typeof app !== 'undefined' ? app.version : 'N/A',
+            hasProject: typeof app !== 'undefined' && app.project ? true : false,
+            autoClipperLoaded: typeof _autoClipperLoaded !== 'undefined' ? _autoClipperLoaded : false
+        };
+        return JSON.stringify(result);
+    } catch (e) {
+        return '{"error":"' + e.message + '"}';
+    }
+}
+
+/**
  * Get current project
- * @returns {Project|null}
  */
 function getProject() {
-    if (app.project) {
-        return app.project;
+    try {
+        if (typeof app !== 'undefined' && app.project) {
+            return app.project;
+        }
+    } catch (e) {
+        $.writeln('[AutoClipper] getProject error: ' + e.message);
     }
     return null;
 }
 
 /**
  * Get active sequence
- * @returns {Sequence|null}
  */
 function getActiveSequence() {
-    var project = getProject();
-    if (project && project.activeSequence) {
-        return project.activeSequence;
+    try {
+        var project = getProject();
+        if (project && project.activeSequence) {
+            return project.activeSequence;
+        }
+    } catch (e) {
+        $.writeln('[AutoClipper] getActiveSequence error: ' + e.message);
     }
     return null;
 }
 
 /**
+ * Get source project item from Project Panel selection
+ * User must select the video in Project Panel before creating clips
+ */
+function getSourceProjectItem() {
+    var project = getProject();
+    if (!project) return null;
+
+    try {
+        var viewIds = app.getProjectViewIDs();
+        $.writeln('[AutoClipper] Project view IDs: ' + viewIds.length);
+
+        if (viewIds && viewIds.length > 0) {
+            var selectedItems = app.getProjectViewSelection(viewIds[0]);
+            $.writeln('[AutoClipper] Selected items: ' + (selectedItems ? selectedItems.length : 0));
+
+            if (selectedItems && selectedItems.length > 0) {
+                var item = selectedItems[0];
+                $.writeln('[AutoClipper] Selected item: ' + item.name + ' (type: ' + item.type + ')');
+
+                // Check if it's a media clip (not a bin or sequence)
+                // ProjectItemType.CLIP = 1, BIN = 2, FILE = 4
+                if (item.type !== 2) { // Not a BIN
+                    return item;
+                } else {
+                    $.writeln('[AutoClipper] Selected item is a bin, not a clip');
+                }
+            }
+        }
+    } catch (e) {
+        $.writeln('[AutoClipper] getSourceProjectItem error: ' + e.message);
+    }
+
+    return null;
+}
+
+/**
  * Get or create AutoClipper bin in project
- * @returns {ProjectItem} The AutoClipper bin
  */
 function getOrCreateAutoClipperBin() {
     var project = getProject();
     if (!project) return null;
 
-    var root = project.rootItem;
-    var binName = 'AutoClipper';
+    try {
+        var root = project.rootItem;
+        var binName = 'AutoClipper';
 
-    // Search for existing bin
-    for (var i = 0; i < root.children.numItems; i++) {
-        var item = root.children[i];
-        if (item.name === binName && item.type === ProjectItemType.BIN) {
-            return item;
+        // Search for existing bin
+        for (var i = 0; i < root.children.numItems; i++) {
+            var item = root.children[i];
+            if (item.name === binName && item.type === ProjectItemType.BIN) {
+                return item;
+            }
         }
-    }
 
-    // Create new bin
-    return root.createBin(binName);
+        // Create new bin
+        return root.createBin(binName);
+    } catch (e) {
+        $.writeln('[AutoClipper] getOrCreateAutoClipperBin error: ' + e.message);
+        return null;
+    }
 }
 
 /**
  * Reveal AutoClipper bin in project panel
- * @returns {string} 'ok' or 'error'
  */
 function revealAutoClipperBin() {
     try {
@@ -98,22 +175,17 @@ function revealAutoClipperBin() {
 
 /**
  * Get selected clips in project panel
- * @returns {string} JSON array of selected items
  */
 function getSelectedClips() {
     var project = getProject();
     if (!project) return '[]';
 
     var selected = [];
-    var viewIDs = project.getProjectPanelListViewIDs();
-
-    // Note: This API is limited - may need alternative approach
     return JSON.stringify(selected);
 }
 
 /**
  * Get subtitle presets from project
- * @returns {string} JSON array of presets
  */
 function getSubtitlePresets() {
     var presets = [
@@ -122,45 +194,32 @@ function getSubtitlePresets() {
         { id: 'bold_outline', name: 'Bold Outline' },
         { id: 'none', name: 'Sin subtitulos' }
     ];
-
-    // TODO: Read actual Motion Graphics Templates from project
-    // app.project.rootItem.children can contain .mogrt files
-
     return JSON.stringify(presets);
 }
 
 /**
  * Play clip range in source monitor
- * @param {number} startTime - Start time in seconds
- * @param {number} endTime - End time in seconds
  */
 function playClipRange(startTime, endTime) {
     var seq = getActiveSequence();
-    if (!seq) return 'error';
+    if (!seq) return 'error: No active sequence';
 
     try {
-        // Convert seconds to ticks
-        var ticksPerSecond = 254016000000; // Premiere's ticks per second
+        var ticksPerSecond = 254016000000;
         var startTicks = startTime * ticksPerSecond;
         var endTicks = endTime * ticksPerSecond;
 
-        // Set in/out points
         seq.setInPoint(startTicks.toString());
         seq.setOutPoint(endTicks.toString());
-
-        // Move playhead to start
         seq.setPlayerPosition(startTicks.toString());
 
-        // Try to auto-play using QE DOM if available
+        // Try QE DOM for playback
         try {
-            if (typeof qe !== 'undefined') {
-                qe.project.getActiveSequence().player.play(1.0);
-            } else if (app.enableQE && app.enableQE()) {
+            if (typeof qe !== 'undefined' && qe.project) {
                 qe.project.getActiveSequence().player.play(1.0);
             }
         } catch (playErr) {
-            // QE not available, user needs to press space
-            $.writeln('Auto-play not available: ' + playErr.message);
+            // Ignore - user can press space
         }
 
         return 'ok';
@@ -170,24 +229,25 @@ function playClipRange(startTime, endTime) {
 }
 
 /**
- * Find a sequence's ProjectItem by name in the project
- * @param {string} seqName - Name of the sequence to find
- * @returns {ProjectItem|null}
+ * Find a sequence's ProjectItem by name
  */
 function findSequenceProjectItem(seqName) {
     var project = getProject();
     if (!project) return null;
 
-    // Search recursively in bins
     function searchBin(bin) {
-        for (var i = 0; i < bin.children.numItems; i++) {
-            var item = bin.children[i];
-            if (item.type === ProjectItemType.BIN) {
-                var found = searchBin(item);
-                if (found) return found;
-            } else if (item.name === seqName) {
-                return item;
+        try {
+            for (var i = 0; i < bin.children.numItems; i++) {
+                var item = bin.children[i];
+                if (item.type === ProjectItemType.BIN) {
+                    var found = searchBin(item);
+                    if (found) return found;
+                } else if (item.name === seqName) {
+                    return item;
+                }
             }
+        } catch (e) {
+            $.writeln('[AutoClipper] searchBin error: ' + e.message);
         }
         return null;
     }
@@ -197,9 +257,7 @@ function findSequenceProjectItem(seqName) {
 
 /**
  * Create a new sequence from a clip segment
- * @param {string} clipDataJSON - JSON with clip info (startTime, endTime, suggestedTitle)
- * @param {string} presetId - Subtitle preset ID
- * @returns {string} 'ok' or 'error'
+ * NEW: Uses selected item in Project Panel instead of active sequence
  */
 function createSequenceFromClip(clipDataJSON, presetId) {
     $.writeln('[AutoClipper] === createSequenceFromClip START ===');
@@ -212,18 +270,26 @@ function createSequenceFromClip(clipDataJSON, presetId) {
     $.writeln('[AutoClipper] Project: ' + project.name);
 
     try {
-        var clipData = JSON.parse(clipDataJSON);
+        var clipData;
+        try {
+            clipData = JSON.parse(clipDataJSON);
+        } catch (parseErr) {
+            $.writeln('[AutoClipper] ERROR: Invalid JSON: ' + parseErr.message);
+            return 'error: Invalid clip data JSON';
+        }
+
         $.writeln('[AutoClipper] Clip: ' + clipData.suggestedTitle);
         $.writeln('[AutoClipper] Time range: ' + clipData.startTime + 's - ' + clipData.endTime + 's');
 
-        var seq = getActiveSequence();
-        if (!seq) {
-            $.writeln('[AutoClipper] ERROR: No active sequence');
-            return 'error: No active sequence - open a sequence in the timeline first';
+        // Get source from Project Panel selection (no sequence needed!)
+        var sourceProjectItem = getSourceProjectItem();
+        if (!sourceProjectItem) {
+            $.writeln('[AutoClipper] ERROR: No video selected in Project Panel');
+            return 'error: Select the source video in the Project Panel first';
         }
-        $.writeln('[AutoClipper] Source sequence: ' + seq.name);
+        $.writeln('[AutoClipper] Source: ' + sourceProjectItem.name);
 
-        // Get AutoClipper bin first
+        // Create AutoClipper bin
         var autoClipperBin = getOrCreateAutoClipperBin();
         if (!autoClipperBin) {
             $.writeln('[AutoClipper] ERROR: Could not create AutoClipper bin');
@@ -231,110 +297,81 @@ function createSequenceFromClip(clipDataJSON, presetId) {
         }
         $.writeln('[AutoClipper] AutoClipper bin ready: ' + autoClipperBin.name);
 
-        // Find source clip in timeline
-        var videoTracks = seq.videoTracks;
-        if (videoTracks.numTracks === 0) {
-            $.writeln('[AutoClipper] ERROR: No video tracks');
-            return 'error: No video tracks in sequence';
-        }
-
-        var sourceClip = null;
-        var sourceProjectItem = null;
-
-        // Search all video tracks
-        for (var t = 0; t < videoTracks.numTracks && !sourceClip; t++) {
-            var track = videoTracks[t];
-            $.writeln('[AutoClipper] Searching track ' + t + ' (' + track.clips.numItems + ' clips)');
-
-            for (var i = 0; i < track.clips.numItems; i++) {
-                var clip = track.clips[i];
-                var clipStart = parseFloat(clip.start.seconds);
-                var clipEnd = parseFloat(clip.end.seconds);
-
-                // Check if clip contains our time range
-                if (clipStart <= clipData.startTime && clipEnd >= clipData.endTime) {
-                    sourceClip = clip;
-                    sourceProjectItem = clip.projectItem;
-                    $.writeln('[AutoClipper] Found clip: ' + clipStart + 's - ' + clipEnd + 's');
-                    break;
-                }
-                // Check for overlap
-                if (clipStart <= clipData.endTime && clipEnd >= clipData.startTime) {
-                    sourceClip = clip;
-                    sourceProjectItem = clip.projectItem;
-                    $.writeln('[AutoClipper] Found overlapping clip: ' + clipStart + 's - ' + clipEnd + 's');
-                    break;
-                }
-            }
-        }
-
-        if (!sourceClip || !sourceProjectItem) {
-            $.writeln('[AutoClipper] ERROR: No clip found at time range');
-            return 'error: No clip found at time ' + clipData.startTime + 's - ' + clipData.endTime + 's';
-        }
-        $.writeln('[AutoClipper] Source projectItem: ' + sourceProjectItem.name);
-
         // Create sequence name (sanitize for filesystem)
-        var seqName = (clipData.suggestedTitle || 'AutoClip_' + Date.now())
-            .replace(/[\\/:*?"<>|]/g, '_')
-            .substring(0, 50);
+        var seqName = (clipData.suggestedTitle || 'AutoClip_' + Date.now());
+        seqName = seqName.replace(/\\/g, '_');
+        seqName = seqName.replace(/\//g, '_');
+        seqName = seqName.replace(/:/g, '_');
+        seqName = seqName.replace(/\*/g, '_');
+        seqName = seqName.replace(/\?/g, '_');
+        seqName = seqName.replace(/"/g, '_');
+        seqName = seqName.replace(/</g, '_');
+        seqName = seqName.replace(/>/g, '_');
+        seqName = seqName.replace(/\|/g, '_');
+        seqName = seqName.substring(0, 50);
 
-        // Method 1: Try createNewSequenceFromClips with destination bin
         $.writeln('[AutoClipper] Creating sequence: ' + seqName);
 
-        // Set in/out on source projectItem before creating sequence
-        var ticksPerSecond = 254016000000;
+        // Set in/out points directly on the source project item
+        // Times from transcript are absolute (from start of video)
+        var desiredInPoint = clipData.startTime;
+        var desiredOutPoint = clipData.endTime;
 
-        // Calculate in/out relative to clip position in timeline
-        var clipStartInTimeline = parseFloat(sourceClip.start.seconds);
-        var mediaInPoint = parseFloat(sourceClip.inPoint.seconds);
+        $.writeln('[AutoClipper] In/Out points: ' + desiredInPoint + 's - ' + desiredOutPoint + 's');
 
-        // The offset from clip start to our desired start
-        var offsetFromClipStart = clipData.startTime - clipStartInTimeline;
-        var desiredInPoint = mediaInPoint + offsetFromClipStart;
-        var desiredOutPoint = desiredInPoint + (clipData.endTime - clipData.startTime);
-
-        $.writeln('[AutoClipper] Media in/out: ' + desiredInPoint + 's - ' + desiredOutPoint + 's');
-
-        // Set in/out on the source project item
+        // Set in/out on source item
         sourceProjectItem.setInPoint(desiredInPoint, 4); // 4 = all media types
         sourceProjectItem.setOutPoint(desiredOutPoint, 4);
 
-        // Create sequence from the clip with in/out points
-        var newSeq = project.createNewSequenceFromClips(
-            seqName,
-            [sourceProjectItem],
-            autoClipperBin  // Destination bin!
-        );
+        // Create sequence from clip with in/out points
+        var newSeq = null;
+        try {
+            newSeq = project.createNewSequenceFromClips(seqName, [sourceProjectItem], autoClipperBin);
+            $.writeln('[AutoClipper] createNewSequenceFromClips result: ' + (newSeq ? 'success' : 'null'));
+        } catch (seqErr) {
+            $.writeln('[AutoClipper] createNewSequenceFromClips error: ' + seqErr.message);
+        }
 
         // Clear in/out points on source to not affect future uses
         sourceProjectItem.clearInPoint(4);
         sourceProjectItem.clearOutPoint(4);
 
         if (!newSeq) {
-            $.writeln('[AutoClipper] createNewSequenceFromClips failed, trying fallback...');
+            $.writeln('[AutoClipper] Primary method failed, trying fallback...');
 
             // Fallback: create empty sequence and insert clip
-            newSeq = project.createNewSequence(seqName, seqName);
-            if (!newSeq) {
-                $.writeln('[AutoClipper] ERROR: Could not create sequence');
-                return 'error: Could not create sequence';
+            try {
+                newSeq = project.createNewSequence(seqName, seqName);
+            } catch (fallbackErr) {
+                $.writeln('[AutoClipper] createNewSequence error: ' + fallbackErr.message);
+                return 'error: Could not create sequence: ' + fallbackErr.message;
             }
 
-            // Insert clip
-            var newVideoTrack = newSeq.videoTracks[0];
-            if (newVideoTrack) {
-                newVideoTrack.insertClip(sourceProjectItem, 0);
-                $.writeln('[AutoClipper] Inserted clip into new sequence');
+            if (newSeq && newSeq.videoTracks && newSeq.videoTracks[0]) {
+                // Re-set in/out for insert
+                sourceProjectItem.setInPoint(desiredInPoint, 4);
+                sourceProjectItem.setOutPoint(desiredOutPoint, 4);
+
+                try {
+                    newSeq.videoTracks[0].insertClip(sourceProjectItem, 0);
+                    $.writeln('[AutoClipper] Inserted clip into new sequence');
+                } catch (insertErr) {
+                    $.writeln('[AutoClipper] Insert error: ' + insertErr.message);
+                }
+
+                sourceProjectItem.clearInPoint(4);
+                sourceProjectItem.clearOutPoint(4);
             }
 
-            // Try to move to bin
+            // Move sequence to AutoClipper bin
             var seqProjectItem = findSequenceProjectItem(seqName);
             if (seqProjectItem) {
-                seqProjectItem.moveBin(autoClipperBin);
-                $.writeln('[AutoClipper] Moved sequence to bin');
-            } else {
-                $.writeln('[AutoClipper] WARNING: Could not find sequence to move to bin');
+                try {
+                    seqProjectItem.moveBin(autoClipperBin);
+                    $.writeln('[AutoClipper] Moved sequence to bin');
+                } catch (moveErr) {
+                    $.writeln('[AutoClipper] Move error: ' + moveErr.message);
+                }
             }
         }
 
@@ -342,7 +379,7 @@ function createSequenceFromClip(clipDataJSON, presetId) {
         return 'ok: Created ' + seqName;
 
     } catch (e) {
-        $.writeln('[AutoClipper] ERROR: ' + e.message);
+        $.writeln('[AutoClipper] FATAL ERROR: ' + e.message);
         $.writeln('[AutoClipper] Line: ' + e.line);
         return 'error: ' + e.message;
     }
@@ -350,10 +387,6 @@ function createSequenceFromClip(clipDataJSON, presetId) {
 
 /**
  * Export sequences to Media Encoder
- * @param {string} sequenceNamesJSON - JSON array of sequence names
- * @param {string} outputPath - Output directory path
- * @param {string} presetPath - AME preset path
- * @returns {string} 'ok' or 'error'
  */
 function exportSequences(sequenceNamesJSON, outputPath, presetPath) {
     var project = getProject();
@@ -361,9 +394,8 @@ function exportSequences(sequenceNamesJSON, outputPath, presetPath) {
 
     try {
         var sequenceNames = JSON.parse(sequenceNamesJSON);
-
-        // Find sequences by name
         var sequences = [];
+
         for (var i = 0; i < project.sequences.numSequences; i++) {
             var seq = project.sequences[i];
             for (var j = 0; j < sequenceNames.length; j++) {
@@ -378,24 +410,20 @@ function exportSequences(sequenceNamesJSON, outputPath, presetPath) {
             return 'error: No sequences found';
         }
 
-        // Queue each sequence for export
         for (var k = 0; k < sequences.length; k++) {
             var seq = sequences[k];
             var outputFile = outputPath + '/' + seq.name + '.mp4';
 
-            // Add to AME queue
             app.encoder.encodeSequence(
                 seq,
                 outputFile,
                 presetPath,
                 app.encoder.ENCODE_WORKAREA,
-                1 // Remove on completion
+                1
             );
         }
 
-        // Start encoding
         app.encoder.startBatch();
-
         return 'ok';
 
     } catch (e) {
@@ -405,8 +433,6 @@ function exportSequences(sequenceNamesJSON, outputPath, presetPath) {
 
 /**
  * Create markers at viral moments
- * @param {string} momentsJSON - JSON array of {time, label}
- * @returns {string} 'ok' or 'error'
  */
 function createMarkers(momentsJSON) {
     var seq = getActiveSequence();
@@ -423,9 +449,7 @@ function createMarkers(momentsJSON) {
             if (marker) {
                 marker.name = moment.label || 'Viral Moment';
                 marker.comments = moment.text || '';
-
-                // Set marker color (green for viral)
-                marker.setColorByIndex(3); // Green
+                marker.setColorByIndex(3);
             }
         }
 
@@ -438,39 +462,44 @@ function createMarkers(momentsJSON) {
 
 /**
  * Get project info for debugging
- * @returns {string} JSON with project info
  */
 function getProjectInfo() {
     var project = getProject();
     if (!project) return '{"error": "No project"}';
 
-    var seq = getActiveSequence();
+    try {
+        var seq = getActiveSequence();
+        var info = {
+            name: project.name,
+            path: project.path,
+            hasActiveSequence: !!seq,
+            sequenceName: seq ? seq.name : null,
+            sequenceCount: project.sequences.numSequences
+        };
+        return JSON.stringify(info);
+    } catch (e) {
+        return '{"error": "' + e.message + '"}';
+    }
+}
 
-    var info = {
-        name: project.name,
-        path: project.path,
-        hasActiveSequence: !!seq,
-        sequenceName: seq ? seq.name : null,
-        sequenceCount: project.sequences.numSequences
-    };
-
-    return JSON.stringify(info);
+/**
+ * Simple test function to verify script is loaded
+ */
+function testExtendScript() {
+    try {
+        return 'ExtendScript OK - ' + new Date().toISOString();
+    } catch (e) {
+        return 'ExtendScript ERROR - ' + e.message;
+    }
 }
 
 // Log initialization
-$.writeln('AutoClipper ExtendScript loaded');
-
-// Try to enable QE DOM for playback control
 try {
-    if (typeof app !== 'undefined' && app.enableQE) {
-        app.enableQE();
-        $.writeln('AutoClipper: QE DOM enabled');
+    $.writeln('[AutoClipper] ExtendScript loaded successfully');
+    $.writeln('[AutoClipper] Version: ' + $.version);
+    if (typeof app !== 'undefined') {
+        $.writeln('[AutoClipper] App: ' + app.name + ' ' + app.version);
     }
-} catch (qeErr) {
-    $.writeln('AutoClipper: QE DOM not available - ' + qeErr.message);
-}
-
-// Simple test function to verify script is loaded
-function testExtendScript() {
-    return 'ExtendScript OK - ' + new Date().toISOString();
+} catch (logErr) {
+    // Ignore logging errors
 }
