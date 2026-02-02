@@ -227,9 +227,9 @@ const OllamaClient = {
         }
 
         const {
-            minClipDuration = 15,
+            minClipDuration = 30,  // Minimum 30 seconds for a proper clip
             maxClipDuration = 90,
-            minViralScore = 70,  // Quality threshold instead of fixed count
+            minViralScore = 50,  // Lower threshold - user filters manually
             contentType = 'general'
         } = options;
 
@@ -497,21 +497,29 @@ const OllamaClient = {
     getSystemPrompt() {
         return `You are an expert at identifying viral clips from educational content, coaching sessions, and mentorship calls.
 
-TARGET: Short-form clips (15-90s) for TikTok, Reels, Shorts from classes and mentoring sessions.
+TARGET: Short-form clips for TikTok, Reels, Shorts from classes and mentoring sessions.
+
+CRITICAL DURATION RULE:
+- Each clip MUST be a COMPLETE segment of at least 30 seconds
+- Do NOT return single sentences or short fragments
+- Find the FULL context: include setup + main point + conclusion
+- Expand clips to include natural start/end points in conversation
 
 SCORING FORMULA - Calculate viralScore as weighted average:
 - insight (25%): Mentor reveals something that shifts perspective, "aha moment"
-- raw (20%): Unfiltered language, slang, brutal honesty, strong personality - MORE IS BETTER
+- raw (20%): Unfiltered language, slang, brutal honesty, strong personality
 - actionable (20%): Specific advice viewer can apply immediately
 - hook (15%): Opening grabs attention, creates curiosity or shock
 - relatable (10%): Addresses common struggle/question
 - standalone (10%): Makes complete sense without prior context
 
-SCORE CALIBRATION:
-- 85-100: Gold - perspective-shifting insight with clear takeaway
-- 70-84: Strong - valuable advice with good hook
-- 55-69: Decent - needs strong editing/hook overlay
-- Below 55: Skip
+SCORE CALIBRATION (be generous - human will filter):
+- 80-100: Gold - perspective-shifting insight with clear takeaway
+- 60-79: Strong - valuable advice, worth reviewing
+- 40-59: Potential - might work with good editing
+- Below 40: Weak but still include if meets duration
+
+BE GENEROUS: Include any segment that MIGHT be valuable. The human editor will make final decisions.
 
 You MUST respond with valid JSON only. No explanations outside the JSON.`;
     },
@@ -520,25 +528,26 @@ You MUST respond with valid JSON only. No explanations outside the JSON.`;
      * Build user prompt
      */
     buildUserPrompt(transcript, options) {
-        return `Analyze this transcript and find ALL viral-worthy moments.
+        return `Analyze this transcript and find ALL potentially viral moments.
 
 TRANSCRIPT:
 ${transcript}
 
-REQUIREMENTS:
-- Find ALL clips with viralScore >= ${options.minViralScore}
-- Clip duration: ${options.minDuration} to ${options.maxDuration} seconds
-- Each clip must make sense as standalone content
-- Prioritize by viralScore (highest first)
-- Do NOT include clips below ${options.minViralScore} score
+CRITICAL REQUIREMENTS:
+- MINIMUM ${options.minDuration} SECONDS per clip - this is mandatory, no exceptions
+- Maximum ${options.maxDuration} seconds per clip
+- Do NOT return short fragments or single sentences
+- Include the FULL context: setup + main point + natural ending
+- BE GENEROUS: include anything that MIGHT be useful, human will filter
+- If a good moment is under ${options.minDuration}s, EXPAND it to include surrounding context
 
 Respond with a JSON array of clips. Each clip must have:
 - startTime: number (seconds from transcript timestamps)
-- endTime: number (seconds)
+- endTime: number (endTime - startTime MUST be >= ${options.minDuration})
 - text: string (the actual transcript text for this clip)
 - viralScore: number (0-100)
-- suggestedTitle: string (catchy title for the clip)
-- reasoning: string (brief explanation)
+- suggestedTitle: string (catchy title)
+- reasoning: string (why this moment has potential)
 
 Return ONLY the JSON array, no other text.`;
     },
@@ -597,13 +606,14 @@ Return ONLY the JSON array, no other text.`;
 
     /**
      * Validate clip meets criteria
+     * Note: Only filters by duration - user does manual quality filtering
      */
     isValidClip(clip, options) {
         const duration = clip.endTime - clip.startTime;
         const isValid = (
             duration >= options.minClipDuration &&
             duration <= options.maxClipDuration &&
-            clip.viralScore >= 55 &&
+            clip.viralScore >= 0 &&  // No score filtering - show all, user decides
             clip.startTime >= 0 &&
             clip.endTime > clip.startTime
         );
@@ -614,8 +624,7 @@ Return ONLY the JSON array, no other text.`;
                 duration: duration.toFixed(1) + 's',
                 score: clip.viralScore,
                 reason: duration < options.minClipDuration ? 'too short' :
-                        duration > options.maxClipDuration ? 'too long' :
-                        clip.viralScore < 55 ? 'low score' : 'invalid times'
+                        duration > options.maxClipDuration ? 'too long' : 'invalid times'
             });
         }
 
