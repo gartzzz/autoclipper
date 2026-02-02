@@ -200,11 +200,10 @@ const OpenRouterClient = {
                 momentsFound: clips.length
             });
 
-            // Filter and sort
+            // Filter and sort by viral score (no fixed limit - quality threshold instead)
             const validClips = clips
                 .filter(clip => this.isValidClip(clip, { minClipDuration, maxClipDuration }))
-                .sort((a, b) => b.viralScore - a.viralScore)
-                .slice(0, targetCount);
+                .sort((a, b) => b.viralScore - a.viralScore);
 
             // Remove overlaps
             const finalClips = this.removeOverlaps(validClips);

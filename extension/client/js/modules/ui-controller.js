@@ -887,7 +887,7 @@ const UIController = {
         const preset = this.elements.subtitlePreset.value;
         const total = this.approvedClips.length;
 
-        // Initial list
+        // Initial list - all pending
         this.elements.generationList.innerHTML = this.approvedClips.map((clip, i) => `
             <div class="generation-item" id="gen-item-${i}">
                 <span class="status-icon pending">○</span>
@@ -898,61 +898,93 @@ const UIController = {
             </div>
         `).join('');
 
+        // Mark all as working
         for (let i = 0; i < total; i++) {
-            const clip = this.approvedClips[i];
             const item = document.getElementById(`gen-item-${i}`);
-
-            // Update to working
             item.querySelector('.status-icon').textContent = '⟳';
             item.querySelector('.status-icon').className = 'status-icon working';
-            item.querySelector('.subtitle').textContent = 'Creando secuencia...';
-
-            try {
-                // Call ExtendScript to create sequence
-                if (typeof csInterface !== 'undefined' && csInterface !== null) {
-                    const result = await new Promise((resolve, reject) => {
-                        const script = `createSequenceFromClip(${JSON.stringify(JSON.stringify(clip))}, "${preset}")`;
-                        console.log('[AutoClipper] Calling ExtendScript:', script);
-
-                        csInterface.evalScript(script, (result) => {
-                            console.log('[AutoClipper] ExtendScript result:', result);
-                            if (result && result.toString().startsWith('error')) {
-                                reject(new Error(result));
-                            } else if (result === 'EvalScript error.' || result === 'undefined') {
-                                reject(new Error('ExtendScript function not found - host script may not be loaded'));
-                            } else {
-                                resolve(result);
-                            }
-                        });
-                    });
-
-                    console.log('[AutoClipper] Sequence created:', result);
-                } else {
-                    // Simulate for testing
-                    console.log('[AutoClipper] Running in standalone mode - simulating');
-                    await new Promise(r => setTimeout(r, 1000));
-                }
-
-                // Update to done
-                item.querySelector('.status-icon').textContent = '✓';
-                item.querySelector('.status-icon').className = 'status-icon done';
-                item.querySelector('.subtitle').textContent = 'Completado';
-
-            } catch (error) {
-                console.error('[AutoClipper] Error creating sequence:', error);
-                item.querySelector('.status-icon').textContent = '✗';
-                item.querySelector('.status-icon').className = 'status-icon error';
-                item.querySelector('.subtitle').textContent = error.message || 'Error';
-            }
-
-            // Update progress
-            this.elements.generationProgress.style.width = `${((i + 1) / total) * 100}%`;
-            this.elements.generationStatus.textContent =
-                `${i + 1}/${total} secuencias creadas`;
+            item.querySelector('.subtitle').textContent = 'Procesando...';
         }
 
-        // Done
-        this.elements.generationStatus.textContent = '¡Generacion completada!';
+        this.elements.generationStatus.textContent = `Creando ${total} secuencias...`;
+        this.elements.generationProgress.style.width = '50%';
+
+        try {
+            if (typeof csInterface !== 'undefined' && csInterface !== null) {
+                // Call batch function - creates ALL sequences in one call
+                const clipsJSON = JSON.stringify(this.approvedClips);
+                const script = `createSequencesBatch(${JSON.stringify(clipsJSON)}, "${preset}")`;
+                console.log('[AutoClipper] Calling batch ExtendScript');
+
+                const result = await new Promise((resolve, reject) => {
+                    csInterface.evalScript(script, (result) => {
+                        console.log('[AutoClipper] Batch result:', result);
+                        if (result === 'EvalScript error.' || result === 'undefined') {
+                            reject(new Error('ExtendScript function not found'));
+                        } else {
+                            resolve(result);
+                        }
+                    });
+                });
+
+                // Parse batch results
+                const batchResult = JSON.parse(result);
+                console.log('[AutoClipper] Batch parsed:', batchResult);
+
+                if (!batchResult.success && batchResult.error) {
+                    throw new Error(batchResult.error);
+                }
+
+                // Update UI with individual results
+                batchResult.results.forEach((res, i) => {
+                    const item = document.getElementById(`gen-item-${i}`);
+                    if (res.success) {
+                        item.querySelector('.status-icon').textContent = '✓';
+                        item.querySelector('.status-icon').className = 'status-icon done';
+                        item.querySelector('.subtitle').textContent = 'Completado';
+                    } else {
+                        item.querySelector('.status-icon').textContent = '✗';
+                        item.querySelector('.status-icon').className = 'status-icon error';
+                        item.querySelector('.subtitle').textContent = res.error || 'Error';
+                    }
+                });
+
+                this.elements.generationProgress.style.width = '100%';
+                this.elements.generationStatus.textContent =
+                    `¡${batchResult.created}/${batchResult.total} secuencias creadas!`;
+
+            } else {
+                // Simulate for testing
+                console.log('[AutoClipper] Running in standalone mode - simulating');
+                await new Promise(r => setTimeout(r, 2000));
+
+                for (let i = 0; i < total; i++) {
+                    const item = document.getElementById(`gen-item-${i}`);
+                    item.querySelector('.status-icon').textContent = '✓';
+                    item.querySelector('.status-icon').className = 'status-icon done';
+                    item.querySelector('.subtitle').textContent = 'Completado';
+                }
+
+                this.elements.generationProgress.style.width = '100%';
+                this.elements.generationStatus.textContent = '¡Generacion completada!';
+            }
+
+        } catch (error) {
+            console.error('[AutoClipper] Batch error:', error);
+            this.addDebugLog('Batch error: ' + error.message);
+
+            // Mark all as error
+            for (let i = 0; i < total; i++) {
+                const item = document.getElementById(`gen-item-${i}`);
+                if (item.querySelector('.status-icon').className.includes('working')) {
+                    item.querySelector('.status-icon').textContent = '✗';
+                    item.querySelector('.status-icon').className = 'status-icon error';
+                    item.querySelector('.subtitle').textContent = error.message || 'Error';
+                }
+            }
+
+            this.elements.generationStatus.textContent = 'Error: ' + error.message;
+        }
 
         // Show export help
         const exportHelp = document.getElementById('export-help');

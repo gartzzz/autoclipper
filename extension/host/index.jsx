@@ -386,6 +386,130 @@ function createSequenceFromClip(clipDataJSON, presetId) {
 }
 
 /**
+ * Create multiple sequences from clips in batch
+ * Captures source item ONCE at start to avoid selection issues
+ */
+function createSequencesBatch(clipsArrayJSON, presetId) {
+    $.writeln('[AutoClipper] === createSequencesBatch START ===');
+
+    var project = getProject();
+    if (!project) {
+        return JSON.stringify({ success: false, error: 'No project open', results: [] });
+    }
+
+    var results = [];
+
+    try {
+        var clips = JSON.parse(clipsArrayJSON);
+        $.writeln('[AutoClipper] Processing ' + clips.length + ' clips');
+
+        // CRITICAL: Get source item ONCE before any sequence creation
+        var sourceProjectItem = getSourceProjectItem();
+        if (!sourceProjectItem) {
+            return JSON.stringify({
+                success: false,
+                error: 'Select the source video in the Project Panel first',
+                results: []
+            });
+        }
+        $.writeln('[AutoClipper] Source locked: ' + sourceProjectItem.name);
+
+        // Get/create bin ONCE
+        var autoClipperBin = getOrCreateAutoClipperBin();
+        if (!autoClipperBin) {
+            return JSON.stringify({
+                success: false,
+                error: 'Could not create AutoClipper bin',
+                results: []
+            });
+        }
+
+        // Process each clip
+        for (var i = 0; i < clips.length; i++) {
+            var clipData = clips[i];
+            var clipResult = { index: i, title: clipData.suggestedTitle || 'Clip ' + (i + 1) };
+
+            try {
+                // Sanitize name
+                var seqName = (clipData.suggestedTitle || 'AutoClip_' + Date.now() + '_' + i);
+                seqName = seqName.replace(/[\\\/:*?"<>|]/g, '_').substring(0, 50);
+
+                $.writeln('[AutoClipper] Creating: ' + seqName + ' (' + (i + 1) + '/' + clips.length + ')');
+
+                // Set in/out points
+                sourceProjectItem.setInPoint(clipData.startTime, 4);
+                sourceProjectItem.setOutPoint(clipData.endTime, 4);
+
+                // Create sequence
+                var newSeq = null;
+                try {
+                    newSeq = project.createNewSequenceFromClips(seqName, [sourceProjectItem], autoClipperBin);
+                } catch (seqErr) {
+                    $.writeln('[AutoClipper] createNewSequenceFromClips error: ' + seqErr.message);
+                }
+
+                // Clear in/out points
+                sourceProjectItem.clearInPoint(4);
+                sourceProjectItem.clearOutPoint(4);
+
+                // Fallback if primary method failed
+                if (!newSeq) {
+                    try {
+                        newSeq = project.createNewSequence(seqName, seqName);
+                        if (newSeq && newSeq.videoTracks && newSeq.videoTracks[0]) {
+                            sourceProjectItem.setInPoint(clipData.startTime, 4);
+                            sourceProjectItem.setOutPoint(clipData.endTime, 4);
+                            newSeq.videoTracks[0].insertClip(sourceProjectItem, 0);
+                            sourceProjectItem.clearInPoint(4);
+                            sourceProjectItem.clearOutPoint(4);
+
+                            var seqProjectItem = findSequenceProjectItem(seqName);
+                            if (seqProjectItem) {
+                                seqProjectItem.moveBin(autoClipperBin);
+                            }
+                        }
+                    } catch (fallbackErr) {
+                        $.writeln('[AutoClipper] Fallback error: ' + fallbackErr.message);
+                    }
+                }
+
+                clipResult.success = true;
+                clipResult.sequenceName = seqName;
+
+            } catch (clipErr) {
+                clipResult.success = false;
+                clipResult.error = clipErr.message;
+                $.writeln('[AutoClipper] Clip error: ' + clipErr.message);
+            }
+
+            results.push(clipResult);
+        }
+
+        $.writeln('[AutoClipper] === createSequencesBatch COMPLETE ===');
+
+        var successCount = 0;
+        for (var j = 0; j < results.length; j++) {
+            if (results[j].success) successCount++;
+        }
+
+        return JSON.stringify({
+            success: true,
+            created: successCount,
+            total: clips.length,
+            results: results
+        });
+
+    } catch (e) {
+        $.writeln('[AutoClipper] BATCH FATAL ERROR: ' + e.message);
+        return JSON.stringify({
+            success: false,
+            error: e.message,
+            results: results
+        });
+    }
+}
+
+/**
  * Export sequences to Media Encoder
  */
 function exportSequences(sequenceNamesJSON, outputPath, presetPath) {
