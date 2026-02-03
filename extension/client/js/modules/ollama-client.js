@@ -440,7 +440,16 @@ const OllamaClient = {
             console.log('[AutoClipper Ollama] Valid clips after filter:', validClips.length);
 
             // Remove overlaps
-            const finalClips = this.removeOverlaps(validClips);
+            const deduped = this.removeOverlaps(validClips);
+
+            // Smart filtering: all high quality + limited medium quality
+            // No total limit - long mentorships can have 20+ good clips
+            const highQuality = deduped.filter(c => c.viralScore >= 70);
+            const mediumQuality = deduped.filter(c => c.viralScore >= 50 && c.viralScore < 70).slice(0, 8);
+            const finalClips = [...highQuality, ...mediumQuality].sort((a, b) => b.viralScore - a.viralScore);
+
+            console.log('[AutoClipper Ollama] Smart filter: ' +
+                `${highQuality.length} high (>=70) + ${mediumQuality.length} medium (50-69) = ${finalClips.length} total`);
 
             onProgress?.({
                 progress: 100,
@@ -454,7 +463,7 @@ const OllamaClient = {
                 const error = new Error(
                     clips.length === 0
                         ? 'El modelo no encontro momentos virales en el JSON'
-                        : `Se encontraron ${clips.length} clips pero ninguno paso los filtros (score>=55, duracion 15-90s)`
+                        : `Se encontraron ${clips.length} clips pero ninguno paso los filtros (score>=50, duracion ${minClipDuration}-${maxClipDuration}s)`
                 );
                 error.rawResponse = fullContent;
                 error.parsedClips = clips;

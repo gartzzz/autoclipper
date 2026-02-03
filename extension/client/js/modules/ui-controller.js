@@ -16,6 +16,11 @@ const UIController = {
     approvedClips: [],
     currentClipIndex: 0,
 
+    // Model status (Ollama)
+    _isKeepWarmActive: false,
+    _keepWarmInterval: null,
+    _modelCheckInterval: null,
+
     // DOM elements (cached on init)
     elements: {},
 
@@ -136,7 +141,13 @@ const UIController = {
             ollamaConfig: document.getElementById('ollama-config'),
             ollamaUrlInput: document.getElementById('ollama-url-input'),
             ollamaModelSelect: document.getElementById('ollama-model-select'),
-            refreshModelsBtn: document.getElementById('refresh-models-btn')
+            refreshModelsBtn: document.getElementById('refresh-models-btn'),
+
+            // Model status indicator (Ollama only)
+            modelStatus: document.getElementById('model-status'),
+            modelStatusDot: document.getElementById('model-status-dot'),
+            modelStatusText: document.getElementById('model-status-text'),
+            modelPowerBtn: document.getElementById('model-power-btn')
         };
     },
 
@@ -215,6 +226,9 @@ const UIController = {
             OllamaClient.setModel(e.target.value);
         });
 
+        // Model power button (keep warm / unload)
+        elements.modelPowerBtn?.addEventListener('click', () => this.toggleKeepWarm());
+
         // Export help - open AutoClipper bin
         document.getElementById('open-bin-btn')?.addEventListener('click', () => {
             if (typeof csInterface !== 'undefined') {
@@ -237,6 +251,15 @@ const UIController = {
         // Show/hide config panels
         elements.openrouterConfig.classList.toggle('hidden', backend !== 'openrouter');
         elements.ollamaConfig.classList.toggle('hidden', backend !== 'ollama');
+
+        // Show/hide model status indicator (Ollama only)
+        if (backend === 'ollama') {
+            elements.modelStatus?.classList.remove('hidden');
+            this.startModelStatusPolling();
+        } else {
+            elements.modelStatus?.classList.add('hidden');
+            this.stopModelStatusPolling();
+        }
 
         // Save preference
         if (typeof localStorage !== 'undefined') {
@@ -309,6 +332,103 @@ const UIController = {
 
         elements.refreshModelsBtn.textContent = 'Detectar modelos';
         elements.refreshModelsBtn.disabled = false;
+    },
+
+    /**
+     * Start polling for model status (Ollama)
+     */
+    startModelStatusPolling() {
+        // Stop any existing polling
+        this.stopModelStatusPolling();
+
+        // Check immediately
+        this.updateModelStatus();
+
+        // Then check every 5 seconds
+        this._modelCheckInterval = setInterval(() => {
+            this.updateModelStatus();
+        }, 5000);
+    },
+
+    /**
+     * Stop model status polling
+     */
+    stopModelStatusPolling() {
+        if (this._modelCheckInterval) {
+            clearInterval(this._modelCheckInterval);
+            this._modelCheckInterval = null;
+        }
+        if (this._keepWarmInterval) {
+            clearInterval(this._keepWarmInterval);
+            this._keepWarmInterval = null;
+        }
+        this._isKeepWarmActive = false;
+    },
+
+    /**
+     * Update model status indicator
+     */
+    async updateModelStatus() {
+        const { elements } = this;
+        if (!elements.modelStatusDot || !elements.modelStatusText) return;
+
+        try {
+            const isLoaded = await OllamaClient.isModelLoaded();
+            const model = OllamaClient.getModel();
+
+            if (isLoaded) {
+                elements.modelStatusDot.className = 'status-dot loaded';
+                elements.modelStatusText.textContent = model ? `${model} cargado` : 'Modelo cargado';
+            } else {
+                elements.modelStatusDot.className = 'status-dot';
+                elements.modelStatusText.textContent = 'Modelo no cargado';
+            }
+
+            // Update power button state
+            elements.modelPowerBtn?.classList.toggle('active', this._isKeepWarmActive);
+
+        } catch (error) {
+            elements.modelStatusDot.className = 'status-dot';
+            elements.modelStatusText.textContent = 'Error de conexion';
+        }
+    },
+
+    /**
+     * Toggle keep warm mode
+     */
+    async toggleKeepWarm() {
+        const { elements } = this;
+
+        if (this._isKeepWarmActive) {
+            // Deactivate keep warm
+            if (this._keepWarmInterval) {
+                clearInterval(this._keepWarmInterval);
+                this._keepWarmInterval = null;
+            }
+            this._isKeepWarmActive = false;
+
+            // Unload model
+            await OllamaClient.unloadModel();
+            console.log('[AutoClipper] Model unloaded from GPU');
+
+        } else {
+            // Activate keep warm
+            this._isKeepWarmActive = true;
+
+            // Keep warm immediately
+            await OllamaClient.keepWarm();
+            console.log('[AutoClipper] Keep warm activated (30 min)');
+
+            // Refresh every 25 minutes to maintain warmth
+            this._keepWarmInterval = setInterval(async () => {
+                await OllamaClient.keepWarm();
+                console.log('[AutoClipper] Keep warm refreshed');
+            }, 25 * 60 * 1000);
+        }
+
+        // Update UI
+        elements.modelPowerBtn?.classList.toggle('active', this._isKeepWarmActive);
+        this.updateModelStatus();
     },
 
     /**
@@ -652,8 +772,12 @@ const UIController = {
         const total = this.viralClips.length;
         const current = this.currentClipIndex + 1;
 
+        // Add star for high potential clips (>=75)
+        const isHighPotential = clip.viralScore >= 75;
+        const starPrefix = isHighPotential ? '⭐ ' : '';
+
         this.elements.clipCounter.textContent = `[Clip ${current}/${total}]`;
-        this.elements.clipTitle.textContent = clip.suggestedTitle || `Momento ${current}`;
+        this.elements.clipTitle.textContent = starPrefix + (clip.suggestedTitle || `Momento ${current}`);
         this.elements.clipTranscript.textContent = `"${clip.text || '...'}"`;
         this.elements.clipTimecode.textContent =
             `${SRTParser.formatTime(clip.startTime)} - ${SRTParser.formatTime(clip.endTime)}`;
@@ -850,13 +974,17 @@ const UIController = {
         this.elements.approvedCount.textContent =
             `${this.approvedClips.length} clips aprobados`;
 
-        const listHTML = this.approvedClips.map(clip => `
+        const listHTML = this.approvedClips.map(clip => {
+            const isHighPotential = clip.viralScore >= 75;
+            const starPrefix = isHighPotential ? '⭐ ' : '';
+            return `
             <div class="approved-item">
                 <span class="check">&#10003;</span>
-                <span class="title">${clip.suggestedTitle || 'Clip'}</span>
+                <span class="title">${starPrefix}${clip.suggestedTitle || 'Clip'}</span>
                 <span class="preset-badge">&#9889;</span>
             </div>
-        `).join('');
+        `;
+        }).join('');
 
         this.elements.approvedList.innerHTML = listHTML;
     },
