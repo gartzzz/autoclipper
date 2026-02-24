@@ -20,13 +20,10 @@
                 <Resources>
                     <MainPath>./client/index.html</MainPath>
                     <!-- ScriptPath removed - loading manually to avoid engine crashes -->
-                    <CEFCommandLine>
-                        <Parameter>--enable-nodejs</Parameter>
-                        <Parameter>--mixed-context</Parameter>
-                    </CEFCommandLine>
+                    <!-- CEFCommandLine removed: --enable-nodejs and --mixed-context caused instability -->
                 </Resources>
                 <Lifecycle>
-                    <AutoVisible>true</AutoVisible>
+                    <AutoVisible>false</AutoVisible>
                 </Lifecycle>
                 <UI>
                     <Type>Panel</Type>

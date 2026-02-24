@@ -344,10 +344,12 @@ const UIController = {
         // Check immediately
         this.updateModelStatus();
 
-        // Then check every 5 seconds
+        // Check every 30 seconds (only when on relevant screens)
         this._modelCheckInterval = setInterval(() => {
-            this.updateModelStatus();
-        }, 5000);
+            if (this.currentState === 'setup' || this.currentState === 'settings') {
+                this.updateModelStatus();
+            }
+        }, 30000);
     },
 
     /**

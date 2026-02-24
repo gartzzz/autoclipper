@@ -207,20 +207,9 @@ function playClipRange(startTime, endTime) {
     try {
         var ticksPerSecond = 254016000000;
         var startTicks = startTime * ticksPerSecond;
-        var endTicks = endTime * ticksPerSecond;
 
-        seq.setInPoint(startTicks.toString());
-        seq.setOutPoint(endTicks.toString());
+        // SAFE: Only move the playhead, never touch in/out points or QE DOM
         seq.setPlayerPosition(startTicks.toString());
-
-        // Try QE DOM for playback
-        try {
-            if (typeof qe !== 'undefined' && qe.project) {
-                qe.project.getActiveSequence().player.play(1.0);
-            }
-        } catch (playErr) {
-            // Ignore - user can press space
-        }
 
         return 'ok';
     } catch (e) {
@@ -319,22 +308,24 @@ function createSequenceFromClip(clipDataJSON, presetId) {
 
         $.writeln('[AutoClipper] In/Out points: ' + desiredInPoint + 's - ' + desiredOutPoint + 's');
 
-        // Set in/out on source item
+        // CRITICAL: Use try-finally to ALWAYS clear in/out points
         sourceProjectItem.setInPoint(desiredInPoint, 4); // 4 = all media types
         sourceProjectItem.setOutPoint(desiredOutPoint, 4);
 
-        // Create sequence from clip with in/out points
         var newSeq = null;
         try {
             newSeq = project.createNewSequenceFromClips(seqName, [sourceProjectItem], autoClipperBin);
             $.writeln('[AutoClipper] createNewSequenceFromClips result: ' + (newSeq ? 'success' : 'null'));
         } catch (seqErr) {
             $.writeln('[AutoClipper] createNewSequenceFromClips error: ' + seqErr.message);
+        } finally {
+            try {
+                sourceProjectItem.clearInPoint(4);
+                sourceProjectItem.clearOutPoint(4);
+            } catch (clearErr) {
+                $.writeln('[AutoClipper] clearInPoint/OutPoint error: ' + clearErr.message);
+            }
         }
-
-        // Clear in/out points on source to not affect future uses
-        sourceProjectItem.clearInPoint(4);
-        sourceProjectItem.clearOutPoint(4);
 
         if (!newSeq) {
             $.writeln('[AutoClipper] Primary method failed, trying fallback...');
@@ -348,19 +339,28 @@ function createSequenceFromClip(clipDataJSON, presetId) {
             }
 
             if (newSeq && newSeq.videoTracks && newSeq.videoTracks[0]) {
-                // Re-set in/out for insert
                 sourceProjectItem.setInPoint(desiredInPoint, 4);
                 sourceProjectItem.setOutPoint(desiredOutPoint, 4);
 
                 try {
+                    // Insert into BOTH video and audio tracks
                     newSeq.videoTracks[0].insertClip(sourceProjectItem, 0);
-                    $.writeln('[AutoClipper] Inserted clip into new sequence');
+                    $.writeln('[AutoClipper] Inserted clip into video track');
+
+                    if (newSeq.audioTracks && newSeq.audioTracks[0]) {
+                        newSeq.audioTracks[0].insertClip(sourceProjectItem, 0);
+                        $.writeln('[AutoClipper] Inserted clip into audio track');
+                    }
                 } catch (insertErr) {
                     $.writeln('[AutoClipper] Insert error: ' + insertErr.message);
+                } finally {
+                    try {
+                        sourceProjectItem.clearInPoint(4);
+                        sourceProjectItem.clearOutPoint(4);
+                    } catch (clearErr) {
+                        $.writeln('[AutoClipper] Clear error: ' + clearErr.message);
+                    }
                 }
-
-                sourceProjectItem.clearInPoint(4);
-                sourceProjectItem.clearOutPoint(4);
             }
 
             // Move sequence to AutoClipper bin
@@ -436,21 +436,23 @@ function createSequencesBatch(clipsArrayJSON, presetId) {
 
                 $.writeln('[AutoClipper] Creating: ' + seqName + ' (' + (i + 1) + '/' + clips.length + ')');
 
-                // Set in/out points
+                // CRITICAL: Use try-finally to ALWAYS clear in/out points
                 sourceProjectItem.setInPoint(clipData.startTime, 4);
                 sourceProjectItem.setOutPoint(clipData.endTime, 4);
 
-                // Create sequence
                 var newSeq = null;
                 try {
                     newSeq = project.createNewSequenceFromClips(seqName, [sourceProjectItem], autoClipperBin);
                 } catch (seqErr) {
                     $.writeln('[AutoClipper] createNewSequenceFromClips error: ' + seqErr.message);
+                } finally {
+                    try {
+                        sourceProjectItem.clearInPoint(4);
+                        sourceProjectItem.clearOutPoint(4);
+                    } catch (clearErr) {
+                        $.writeln('[AutoClipper] Clear error: ' + clearErr.message);
+                    }
                 }
-
-                // Clear in/out points
-                sourceProjectItem.clearInPoint(4);
-                sourceProjectItem.clearOutPoint(4);
 
                 // Fallback if primary method failed
                 if (!newSeq) {
@@ -459,9 +461,22 @@ function createSequencesBatch(clipsArrayJSON, presetId) {
                         if (newSeq && newSeq.videoTracks && newSeq.videoTracks[0]) {
                             sourceProjectItem.setInPoint(clipData.startTime, 4);
                             sourceProjectItem.setOutPoint(clipData.endTime, 4);
-                            newSeq.videoTracks[0].insertClip(sourceProjectItem, 0);
-                            sourceProjectItem.clearInPoint(4);
-                            sourceProjectItem.clearOutPoint(4);
+
+                            try {
+                                newSeq.videoTracks[0].insertClip(sourceProjectItem, 0);
+                                if (newSeq.audioTracks && newSeq.audioTracks[0]) {
+                                    newSeq.audioTracks[0].insertClip(sourceProjectItem, 0);
+                                }
+                            } catch (insertErr) {
+                                $.writeln('[AutoClipper] Insert error: ' + insertErr.message);
+                            } finally {
+                                try {
+                                    sourceProjectItem.clearInPoint(4);
+                                    sourceProjectItem.clearOutPoint(4);
+                                } catch (clearErr2) {
+                                    $.writeln('[AutoClipper] Clear error: ' + clearErr2.message);
+                                }
+                            }
 
                             var seqProjectItem = findSequenceProjectItem(seqName);
                             if (seqProjectItem) {

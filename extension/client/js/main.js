@@ -373,20 +373,22 @@ function evalScript(script) {
 function handlePanelClose() {
     console.log('[AutoClipper] Panel closing, cleaning up...');
 
-    // Check if keep-warm is active
+    // Stop model status polling regardless of backend
+    UIController.stopModelStatusPolling();
+
+    // Clean up keep-warm if active
     if (UIController._isKeepWarmActive) {
-        // Clear the interval
         if (UIController._keepWarmInterval) {
             clearInterval(UIController._keepWarmInterval);
             UIController._keepWarmInterval = null;
         }
         UIController._isKeepWarmActive = false;
 
-        // Ask user if they want to unload the model
-        // Note: confirm() may not work on panel close, so we just unload
-        // If you want to keep it loaded, comment out the next line
-        OllamaClient.unloadModel();
-        console.log('[AutoClipper] Model unloaded from GPU');
+        // Only unload if we were actually using Ollama
+        if (UIController.currentBackend === 'ollama') {
+            OllamaClient.unloadModel();
+            console.log('[AutoClipper] Model unloaded from GPU');
+        }
     }
 }
 
