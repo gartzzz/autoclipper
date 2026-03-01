@@ -29,3 +29,6 @@ npm-debug.log*
 # Misc
 .cache/
 tmp/
+
+# Landing page (separate repo)
+landing/
