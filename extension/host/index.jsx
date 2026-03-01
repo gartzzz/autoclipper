@@ -386,8 +386,264 @@ function createSequenceFromClip(clipDataJSON, presetId) {
 }
 
 /**
+ * Format seconds to SRT timecode: HH:MM:SS,mmm
+ */
+function formatSRTTime(totalSeconds) {
+    if (totalSeconds < 0) totalSeconds = 0;
+    var hours = Math.floor(totalSeconds / 3600);
+    var minutes = Math.floor((totalSeconds % 3600) / 60);
+    var secs = Math.floor(totalSeconds % 60);
+    var millis = Math.round((totalSeconds % 1) * 1000);
+
+    function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+    function pad3(n) { return n < 10 ? '00' + n : (n < 100 ? '0' + n : '' + n); }
+
+    return pad2(hours) + ':' + pad2(minutes) + ':' + pad2(secs) + ',' + pad3(millis);
+}
+
+/**
+ * Generate an SRT subtitle file for a clip
+ * Returns the file path or null on failure
+ */
+function generateSRTFile(clipData, seqName) {
+    try {
+        var srtContent = '';
+        var counter = 1;
+
+        // Entry 1: Title overlay (0:00 - 0:03)
+        if (clipData.suggestedTitle) {
+            srtContent += counter + '\r\n';
+            srtContent += '00:00:00,000 --> 00:00:03,000\r\n';
+            srtContent += clipData.suggestedTitle + '\r\n\r\n';
+            counter++;
+        }
+
+        // Build subtitle entries from subtitleSegments
+        var subtitleSegs = clipData.subtitleSegments;
+        if (subtitleSegs && subtitleSegs.length > 0) {
+            // For multi-segment clips, we need cumulative offsets
+            var segments = clipData.segments;
+            var isMultiSegment = segments && segments.length > 1;
+
+            if (isMultiSegment) {
+                // Sort segments by playback order
+                var orderedSegs = [];
+                for (var s = 0; s < segments.length; s++) {
+                    orderedSegs.push(segments[s]);
+                }
+                orderedSegs.sort(function(a, b) { return a.order - b.order; });
+
+                var cumulativeTime = 0;
+                for (var si = 0; si < orderedSegs.length; si++) {
+                    var seg = orderedSegs[si];
+                    var segDuration = seg.endTime - seg.startTime;
+
+                    // Find subtitle segments that fall within this source range
+                    for (var j = 0; j < subtitleSegs.length; j++) {
+                        var sub = subtitleSegs[j];
+                        if (sub.start >= seg.startTime && sub.end <= seg.endTime) {
+                            var relStart = cumulativeTime + (sub.start - seg.startTime);
+                            var relEnd = cumulativeTime + (sub.end - seg.startTime);
+                            srtContent += counter + '\r\n';
+                            srtContent += formatSRTTime(relStart) + ' --> ' + formatSRTTime(relEnd) + '\r\n';
+                            srtContent += sub.text + '\r\n\r\n';
+                            counter++;
+                        }
+                    }
+                    cumulativeTime += segDuration;
+                }
+            } else {
+                // Single segment: timestamps relative to clip start
+                var clipStart = clipData.startTime;
+                for (var k = 0; k < subtitleSegs.length; k++) {
+                    var sub2 = subtitleSegs[k];
+                    var relStart2 = sub2.start - clipStart;
+                    var relEnd2 = sub2.end - clipStart;
+                    if (relStart2 < 0) relStart2 = 0;
+                    srtContent += counter + '\r\n';
+                    srtContent += formatSRTTime(relStart2) + ' --> ' + formatSRTTime(relEnd2) + '\r\n';
+                    srtContent += sub2.text + '\r\n\r\n';
+                    counter++;
+                }
+            }
+        }
+
+        if (counter <= 1) {
+            $.writeln('[AutoClipper] No subtitle content to write');
+            return null;
+        }
+
+        // Write to temp file
+        var safeName = seqName.replace(/[\\\/:*?"<>|]/g, '_');
+        var tempPath = Folder.temp.fsName + '/autoclipper_' + safeName + '.srt';
+        var f = new File(tempPath);
+        f.encoding = 'UTF-8';
+        f.open('w');
+        f.write(srtContent);
+        f.close();
+
+        $.writeln('[AutoClipper] SRT written: ' + tempPath + ' (' + (counter - 1) + ' entries)');
+        return tempPath;
+
+    } catch (e) {
+        $.writeln('[AutoClipper] generateSRTFile error: ' + e.message);
+        return null;
+    }
+}
+
+/**
+ * Import an SRT file into the AutoClipper bin
+ */
+function importSRTForClip(srtPath, autoClipperBin) {
+    try {
+        var project = getProject();
+        if (!project) return false;
+
+        var success = project.importFiles([srtPath], true, autoClipperBin, false);
+        $.writeln('[AutoClipper] SRT import result: ' + success);
+        return success;
+    } catch (e) {
+        $.writeln('[AutoClipper] importSRTForClip error: ' + e.message);
+        return false;
+    }
+}
+
+/**
+ * Create a single-segment sequence (legacy method)
+ * Uses createNewSequenceFromClips with in/out points
+ */
+function createSingleSegmentSequence(clipData, seqName, sourceProjectItem, autoClipperBin, project) {
+    sourceProjectItem.setInPoint(clipData.startTime, 4);
+    sourceProjectItem.setOutPoint(clipData.endTime, 4);
+
+    var newSeq = null;
+    try {
+        newSeq = project.createNewSequenceFromClips(seqName, [sourceProjectItem], autoClipperBin);
+    } catch (seqErr) {
+        $.writeln('[AutoClipper] createNewSequenceFromClips error: ' + seqErr.message);
+    } finally {
+        try {
+            sourceProjectItem.clearInPoint(4);
+            sourceProjectItem.clearOutPoint(4);
+        } catch (clearErr) {
+            $.writeln('[AutoClipper] Clear error: ' + clearErr.message);
+        }
+    }
+
+    // Fallback if primary method failed
+    if (!newSeq) {
+        $.writeln('[AutoClipper] Primary method failed, trying fallback...');
+        try {
+            newSeq = project.createNewSequence(seqName, seqName);
+            if (newSeq && newSeq.videoTracks && newSeq.videoTracks[0]) {
+                sourceProjectItem.setInPoint(clipData.startTime, 4);
+                sourceProjectItem.setOutPoint(clipData.endTime, 4);
+                try {
+                    newSeq.videoTracks[0].insertClip(sourceProjectItem, 0);
+                    if (newSeq.audioTracks && newSeq.audioTracks[0]) {
+                        newSeq.audioTracks[0].insertClip(sourceProjectItem, 0);
+                    }
+                } catch (insertErr) {
+                    $.writeln('[AutoClipper] Insert error: ' + insertErr.message);
+                } finally {
+                    try {
+                        sourceProjectItem.clearInPoint(4);
+                        sourceProjectItem.clearOutPoint(4);
+                    } catch (clearErr2) {
+                        $.writeln('[AutoClipper] Clear error: ' + clearErr2.message);
+                    }
+                }
+
+                var seqProjectItem = findSequenceProjectItem(seqName);
+                if (seqProjectItem) {
+                    seqProjectItem.moveBin(autoClipperBin);
+                }
+            }
+        } catch (fallbackErr) {
+            $.writeln('[AutoClipper] Fallback error: ' + fallbackErr.message);
+        }
+    }
+
+    return newSeq;
+}
+
+/**
+ * Create a multi-segment sequence
+ * Creates empty sequence, then inserts each segment in playback order
+ */
+function createMultiSegmentSequence(clipData, seqName, sourceProjectItem, autoClipperBin, project) {
+    var ticksPerSecond = 254016000000;
+
+    // Sort segments by playback order
+    var segments = [];
+    for (var i = 0; i < clipData.segments.length; i++) {
+        segments.push(clipData.segments[i]);
+    }
+    segments.sort(function(a, b) { return a.order - b.order; });
+
+    $.writeln('[AutoClipper] Multi-segment: ' + segments.length + ' segments');
+
+    // Create empty sequence
+    var newSeq = null;
+    try {
+        newSeq = project.createNewSequence(seqName, seqName);
+    } catch (seqErr) {
+        $.writeln('[AutoClipper] createNewSequence error: ' + seqErr.message);
+        return null;
+    }
+
+    if (!newSeq || !newSeq.videoTracks || !newSeq.videoTracks[0]) {
+        $.writeln('[AutoClipper] Empty sequence creation failed');
+        return null;
+    }
+
+    var insertionTicks = 0;
+
+    for (var s = 0; s < segments.length; s++) {
+        var seg = segments[s];
+        $.writeln('[AutoClipper] Segment ' + (s + 1) + ': ' + seg.startTime + 's - ' + seg.endTime + 's (order ' + seg.order + ')');
+
+        sourceProjectItem.setInPoint(seg.startTime, 4);
+        sourceProjectItem.setOutPoint(seg.endTime, 4);
+
+        try {
+            newSeq.videoTracks[0].insertClip(sourceProjectItem, insertionTicks.toString());
+            if (newSeq.audioTracks && newSeq.audioTracks[0]) {
+                newSeq.audioTracks[0].insertClip(sourceProjectItem, insertionTicks.toString());
+            }
+
+            var segDuration = (seg.endTime - seg.startTime) * ticksPerSecond;
+            insertionTicks += segDuration;
+
+        } catch (insertErr) {
+            $.writeln('[AutoClipper] Segment insert error: ' + insertErr.message);
+        } finally {
+            try {
+                sourceProjectItem.clearInPoint(4);
+                sourceProjectItem.clearOutPoint(4);
+            } catch (clearErr) {
+                $.writeln('[AutoClipper] Clear error: ' + clearErr.message);
+            }
+        }
+    }
+
+    // Move to AutoClipper bin
+    var seqProjectItem = findSequenceProjectItem(seqName);
+    if (seqProjectItem) {
+        try {
+            seqProjectItem.moveBin(autoClipperBin);
+        } catch (moveErr) {
+            $.writeln('[AutoClipper] Move error: ' + moveErr.message);
+        }
+    }
+
+    return newSeq;
+}
+
+/**
  * Create multiple sequences from clips in batch
- * Captures source item ONCE at start to avoid selection issues
+ * Supports both single-segment and multi-segment clips
+ * Generates SRT subtitle files for each clip
  */
 function createSequencesBatch(clipsArrayJSON, presetId) {
     $.writeln('[AutoClipper] === createSequencesBatch START ===');
@@ -436,60 +692,29 @@ function createSequencesBatch(clipsArrayJSON, presetId) {
 
                 $.writeln('[AutoClipper] Creating: ' + seqName + ' (' + (i + 1) + '/' + clips.length + ')');
 
-                // CRITICAL: Use try-finally to ALWAYS clear in/out points
-                sourceProjectItem.setInPoint(clipData.startTime, 4);
-                sourceProjectItem.setOutPoint(clipData.endTime, 4);
-
                 var newSeq = null;
-                try {
-                    newSeq = project.createNewSequenceFromClips(seqName, [sourceProjectItem], autoClipperBin);
-                } catch (seqErr) {
-                    $.writeln('[AutoClipper] createNewSequenceFromClips error: ' + seqErr.message);
-                } finally {
-                    try {
-                        sourceProjectItem.clearInPoint(4);
-                        sourceProjectItem.clearOutPoint(4);
-                    } catch (clearErr) {
-                        $.writeln('[AutoClipper] Clear error: ' + clearErr.message);
-                    }
+
+                // Check if multi-segment clip
+                var isMultiSegment = clipData.segments && clipData.segments.length > 1;
+
+                if (isMultiSegment) {
+                    newSeq = createMultiSegmentSequence(clipData, seqName, sourceProjectItem, autoClipperBin, project);
+                } else {
+                    newSeq = createSingleSegmentSequence(clipData, seqName, sourceProjectItem, autoClipperBin, project);
                 }
 
-                // Fallback if primary method failed
-                if (!newSeq) {
-                    try {
-                        newSeq = project.createNewSequence(seqName, seqName);
-                        if (newSeq && newSeq.videoTracks && newSeq.videoTracks[0]) {
-                            sourceProjectItem.setInPoint(clipData.startTime, 4);
-                            sourceProjectItem.setOutPoint(clipData.endTime, 4);
-
-                            try {
-                                newSeq.videoTracks[0].insertClip(sourceProjectItem, 0);
-                                if (newSeq.audioTracks && newSeq.audioTracks[0]) {
-                                    newSeq.audioTracks[0].insertClip(sourceProjectItem, 0);
-                                }
-                            } catch (insertErr) {
-                                $.writeln('[AutoClipper] Insert error: ' + insertErr.message);
-                            } finally {
-                                try {
-                                    sourceProjectItem.clearInPoint(4);
-                                    sourceProjectItem.clearOutPoint(4);
-                                } catch (clearErr2) {
-                                    $.writeln('[AutoClipper] Clear error: ' + clearErr2.message);
-                                }
-                            }
-
-                            var seqProjectItem = findSequenceProjectItem(seqName);
-                            if (seqProjectItem) {
-                                seqProjectItem.moveBin(autoClipperBin);
-                            }
-                        }
-                    } catch (fallbackErr) {
-                        $.writeln('[AutoClipper] Fallback error: ' + fallbackErr.message);
+                // Generate and import SRT if subtitle data exists
+                if (presetId !== 'none' && clipData.subtitleSegments && clipData.subtitleSegments.length > 0) {
+                    var srtPath = generateSRTFile(clipData, seqName);
+                    if (srtPath) {
+                        importSRTForClip(srtPath, autoClipperBin);
+                        clipResult.srtGenerated = true;
                     }
                 }
 
                 clipResult.success = true;
                 clipResult.sequenceName = seqName;
+                clipResult.segmentCount = isMultiSegment ? clipData.segments.length : 1;
 
             } catch (clipErr) {
                 clipResult.success = false;

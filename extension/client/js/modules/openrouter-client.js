@@ -217,6 +217,18 @@ const OpenRouterClient = {
             console.log('[AutoClipper] Smart filter: ' +
                 `${highQuality.length} high (>=70) + ${mediumQuality.length} medium (50-69) = ${finalClips.length} total`);
 
+            // Enrich clips with subtitle segments from original transcript
+            for (const clip of finalClips) {
+                const orderedSegs = [...(clip.segments || [])].sort((a, b) => a.order - b.order);
+                clip.subtitleSegments = [];
+                for (const seg of orderedSegs) {
+                    const matching = segments.filter(s =>
+                        s.start >= seg.startTime && s.end <= seg.endTime
+                    );
+                    clip.subtitleSegments.push(...matching);
+                }
+            }
+
             onProgress?.({
                 progress: 100,
                 message: 'Complete',
@@ -317,6 +329,15 @@ SCORE CALIBRATION (be generous - human will filter):
 
 BE GENEROUS: Include any segment that MIGHT be valuable. The human editor will make final decisions. Better to include too many than miss good content.
 
+CLIP COMPOSITION:
+- Most clips will be a single continuous segment. That's perfectly fine.
+- When combining phrases from different parts would create a SIGNIFICANTLY more compelling clip, compose multi-segment clips.
+- Use as many segments as needed to maximize viral impact — no artificial limit.
+- Segments must be thematically connected.
+- Use the "segments" array with "order" field to specify playback sequence.
+- Reorder segments when it creates a stronger hook, narrative arc, or emotional payoff.
+- Think like a video editor: what arrangement makes someone STOP scrolling?
+
 PATTERNS TO IDENTIFY:
 - "The real reason X doesn't work is..." (contrarian insight)
 - "Most people think... but actually..." (myth-busting)
@@ -354,9 +375,9 @@ CRITICAL REQUIREMENTS:
 - If a good moment is under ${options.minDuration}s, EXPAND it to include surrounding context
 
 Respond with a JSON array of clips. Each clip must have:
-- startTime: number (seconds from transcript timestamps)
-- endTime: number (endTime - startTime MUST be >= ${options.minDuration})
-- text: string (the actual transcript text for this clip)
+- startTime: number (seconds — min start across all segments)
+- endTime: number (seconds — max end across all segments)
+- text: string (the actual transcript text in playback order)
 - viralScore: number (0-100, calculated as: insight×0.25 + raw×0.20 + actionable×0.20 + hook×0.15 + relatable×0.10 + standalone×0.10)
 - factors: {
     insight: number (0-100) - perspective shift, aha moment
@@ -366,6 +387,9 @@ Respond with a JSON array of clips. Each clip must have:
     relatable: number (0-100) - common problem
     standalone: number (0-100) - works without context
   }
+- segments: array of {startTime, endTime, text, order} — playback order.
+  For single continuous clips, use one segment.
+  For composed clips, specify multiple segments with desired playback order (order 0 plays first).
 - hookSuggestion: string (text overlay for first 3 seconds)
 - suggestedTitle: string (catchy title)
 - hashtags: array of 3-5 hashtags
@@ -398,24 +422,42 @@ Return ONLY the JSON array, no other text.`;
                     typeof clip.endTime === 'number' &&
                     typeof clip.viralScore === 'number'
                 )
-                .map(clip => ({
-                    startTime: clip.startTime,
-                    endTime: clip.endTime,
-                    text: clip.text || '',
-                    viralScore: Math.min(100, Math.max(0, clip.viralScore)),
-                    factors: {
-                        insight: clip.factors?.insight || 0,
-                        raw: clip.factors?.raw || 0,
-                        actionable: clip.factors?.actionable || 0,
-                        hook: clip.factors?.hook || 0,
-                        relatable: clip.factors?.relatable || 0,
-                        standalone: clip.factors?.standalone || 0
-                    },
-                    hookSuggestion: clip.hookSuggestion || '',
-                    suggestedTitle: clip.suggestedTitle || 'Untitled Clip',
-                    hashtags: Array.isArray(clip.hashtags) ? clip.hashtags : [],
-                    reasoning: clip.reasoning || ''
-                }));
+                .map(clip => {
+                    // Build segments array (backward compat: single segment from startTime/endTime)
+                    const segments = Array.isArray(clip.segments) && clip.segments.length > 0
+                        ? clip.segments.map(seg => ({
+                            startTime: parseFloat(seg.startTime),
+                            endTime: parseFloat(seg.endTime),
+                            text: seg.text || '',
+                            order: parseInt(seg.order) || 0
+                          })).sort((a, b) => a.order - b.order)
+                        : [{ startTime: clip.startTime, endTime: clip.endTime, text: clip.text || '', order: 0 }];
+
+                    // Check if playback order differs from chronological
+                    const isReordered = segments.length > 1 &&
+                        segments.some((seg, i) => i > 0 && seg.startTime < segments[i - 1].startTime);
+
+                    return {
+                        startTime: clip.startTime,
+                        endTime: clip.endTime,
+                        text: clip.text || '',
+                        viralScore: Math.min(100, Math.max(0, clip.viralScore)),
+                        factors: {
+                            insight: clip.factors?.insight || 0,
+                            raw: clip.factors?.raw || 0,
+                            actionable: clip.factors?.actionable || 0,
+                            hook: clip.factors?.hook || 0,
+                            relatable: clip.factors?.relatable || 0,
+                            standalone: clip.factors?.standalone || 0
+                        },
+                        segments,
+                        isReordered,
+                        hookSuggestion: clip.hookSuggestion || '',
+                        suggestedTitle: clip.suggestedTitle || 'Untitled Clip',
+                        hashtags: Array.isArray(clip.hashtags) ? clip.hashtags : [],
+                        reasoning: clip.reasoning || ''
+                    };
+                });
 
         } catch (error) {
             console.error('Failed to parse clips:', error);
@@ -439,16 +481,20 @@ Return ONLY the JSON array, no other text.`;
     },
 
     /**
-     * Remove overlapping clips
+     * Remove overlapping clips (supports multi-segment clips)
      */
     removeOverlaps(clips) {
         const result = [];
         for (const clip of clips) {
-            const hasOverlap = result.some(existing =>
-                (clip.startTime >= existing.startTime && clip.startTime < existing.endTime) ||
-                (clip.endTime > existing.startTime && clip.endTime <= existing.endTime) ||
-                (clip.startTime <= existing.startTime && clip.endTime >= existing.endTime)
-            );
+            const clipSegs = clip.segments || [{ startTime: clip.startTime, endTime: clip.endTime }];
+            const hasOverlap = result.some(existing => {
+                const existingSegs = existing.segments || [{ startTime: existing.startTime, endTime: existing.endTime }];
+                return clipSegs.some(cs =>
+                    existingSegs.some(es =>
+                        cs.startTime < es.endTime && cs.endTime > es.startTime
+                    )
+                );
+            });
             if (!hasOverlap) {
                 result.push(clip);
             }

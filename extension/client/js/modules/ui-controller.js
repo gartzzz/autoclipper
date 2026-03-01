@@ -93,6 +93,7 @@ const UIController = {
             skipBtn: document.getElementById('skip-btn'),
             approveBtn: document.getElementById('approve-btn'),
             progressDots: document.getElementById('progress-dots'),
+            clipSegments: document.getElementById('clip-segments'),
             backToSetup: document.getElementById('back-to-setup'),
 
             // Generate
@@ -784,6 +785,21 @@ const UIController = {
         this.elements.clipTimecode.textContent =
             `${SRTParser.formatTime(clip.startTime)} - ${SRTParser.formatTime(clip.endTime)}`;
         this.elements.clipScore.textContent = `${clip.viralScore || 0}%`;
+
+        // Show multi-segment info if applicable
+        if (clip.segments && clip.segments.length > 1) {
+            const reorderedLabel = clip.isReordered ? ' · reordenado' : '';
+            let segHTML = `<div class="segments-header">${clip.segments.length} segmentos${reorderedLabel}</div>`;
+            segHTML += '<ol class="segments-list">';
+            clip.segments.forEach((seg) => {
+                segHTML += `<li><span class="seg-time">${SRTParser.formatTime(seg.startTime)} - ${SRTParser.formatTime(seg.endTime)}</span></li>`;
+            });
+            segHTML += '</ol>';
+            this.elements.clipSegments.innerHTML = segHTML;
+            this.elements.clipSegments.classList.remove('hidden');
+        } else {
+            this.elements.clipSegments.classList.add('hidden');
+        }
 
         // Update progress dots
         this.updateProgressDots();

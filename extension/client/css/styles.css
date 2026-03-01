@@ -316,6 +316,44 @@ body {
     overflow-y: auto;
 }
 
+/* Multi-segment info */
+.clip-segments {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    font-size: 10px;
+}
+
+.clip-segments.hidden {
+    display: none;
+}
+
+.segments-header {
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.segments-list {
+    margin: 0 0 0 16px;
+    padding: 0;
+    color: var(--text-secondary);
+}
+
+.segments-list li {
+    margin: 2px 0;
+    line-height: 1.4;
+}
+
+.seg-time {
+    font-family: monospace;
+    color: var(--text-primary);
+}
+
 .clip-meta {
     display: flex;
     justify-content: space-between;
