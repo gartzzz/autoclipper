@@ -3,6 +3,8 @@
  * Manages state transitions and UI updates for AutoClipper panel
  */
 
+const FREE_CLIP_LIMIT = 3;
+
 const UIController = {
     // Current state
     currentState: 'setup',
@@ -32,6 +34,9 @@ const UIController = {
         this.bindEvents();
         this.bindKeyboardShortcuts();
         this.loadBackendPreference();
+
+        // Update auth UI
+        this.updateAuthUI();
 
         // Check if configured based on backend
         if (!this.isBackendConfigured()) {
@@ -236,6 +241,20 @@ const UIController = {
                 csInterface.evalScript('revealAutoClipperBin()');
             }
         });
+
+        // Auth events
+        document.getElementById('auth-login-btn')?.addEventListener('click', () => this.handleLogin());
+        document.getElementById('auth-signup-btn')?.addEventListener('click', () => this.handleSignup());
+        document.getElementById('auth-logout-btn')?.addEventListener('click', () => this.handleLogout());
+        document.getElementById('auth-password')?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.handleLogin();
+        });
+
+        // Upgrade buttons
+        document.getElementById('upgrade-btn')?.addEventListener('click', () => this.openUpgrade());
+        document.getElementById('upgrade-banner-btn')?.addEventListener('click', () => this.openUpgrade());
+        document.getElementById('upgrade-banner-login')?.addEventListener('click', () => this.setState('settings'));
+        document.getElementById('refresh-plan-btn')?.addEventListener('click', () => this.refreshPlanStatus());
     },
 
     /**
@@ -587,6 +606,9 @@ const UIController = {
 
             // Clear status
             this.elements.keyStatus.classList.add('hidden');
+
+            // Update auth section
+            this.updateAuthUI();
         }
     },
 
@@ -779,7 +801,11 @@ const UIController = {
         const isHighPotential = clip.viralScore >= 75;
         const starPrefix = isHighPotential ? '⭐ ' : '';
 
-        this.elements.clipCounter.textContent = `[Clip ${current}/${total}]`;
+        // Show approved count for free users
+        const isFree = typeof AuthClient !== 'undefined' && !AuthClient.isPro();
+        const approvedCount = this.viralClips.filter(c => c.approved).length;
+        const limitInfo = isFree ? ` (${approvedCount}/${FREE_CLIP_LIMIT} aprobados)` : '';
+        this.elements.clipCounter.textContent = `[Clip ${current}/${total}]${limitInfo}`;
         this.elements.clipTitle.textContent = starPrefix + (clip.suggestedTitle || `Momento ${current}`);
         this.elements.clipTranscript.textContent = `"${clip.text || '...'}"`;
         this.elements.clipTimecode.textContent =
@@ -848,9 +874,19 @@ const UIController = {
      * Approve current clip and move to next
      */
     approveClip() {
+        // Free tier clip limit
+        if (typeof AuthClient !== 'undefined' && !AuthClient.isPro()) {
+            const currentApproved = this.viralClips.filter(c => c.approved).length;
+            if (!this.viralClips[this.currentClipIndex].approved && currentApproved >= FREE_CLIP_LIMIT) {
+                this.showUpgradeBanner();
+                return;
+            }
+        }
+
         this.viralClips[this.currentClipIndex].approved = true;
         this.viralClips[this.currentClipIndex].rejected = false;
         this.viralClips[this.currentClipIndex].skipped = false;
+        this.hideUpgradeBanner();
         this.nextClip();
     },
 
@@ -965,6 +1001,12 @@ const UIController = {
      */
     finishReview() {
         this.approvedClips = this.viralClips.filter(clip => clip.approved);
+
+        // Enforce free tier limit (safety net)
+        if (typeof AuthClient !== 'undefined' && !AuthClient.isPro() && this.approvedClips.length > FREE_CLIP_LIMIT) {
+            this.approvedClips = this.approvedClips.slice(0, FREE_CLIP_LIMIT);
+        }
+
         const skippedCount = this.viralClips.filter(clip => clip.skipped).length;
         const rejectedCount = this.viralClips.filter(clip => clip.rejected).length;
 
@@ -1137,6 +1179,174 @@ const UIController = {
         if (exportHelp) {
             exportHelp.classList.remove('hidden');
         }
+    },
+
+    // ─── Auth & Upgrade Methods ─────────────────────────────────────────
+
+    /**
+     * Update auth UI based on current session
+     */
+    updateAuthUI() {
+        if (typeof AuthClient === 'undefined') return;
+
+        const authForm = document.getElementById('auth-form');
+        const accountInfo = document.getElementById('account-info');
+        const planBadge = document.getElementById('plan-badge');
+        const upgradeBtn = document.getElementById('upgrade-btn');
+
+        if (AuthClient.isLoggedIn()) {
+            authForm?.classList.add('hidden');
+            accountInfo?.classList.remove('hidden');
+
+            const emailEl = document.getElementById('account-email');
+            if (emailEl) emailEl.textContent = AuthClient.getUser()?.email || '';
+
+            const badge = document.getElementById('account-plan-badge');
+            if (AuthClient.isPro()) {
+                if (badge) { badge.textContent = 'Pro'; badge.className = 'plan-badge plan-pro'; }
+                upgradeBtn?.classList.add('hidden');
+            } else {
+                if (badge) { badge.textContent = 'Free'; badge.className = 'plan-badge plan-free'; }
+                upgradeBtn?.classList.remove('hidden');
+            }
+
+            // Setup state badge
+            if (planBadge) {
+                planBadge.classList.remove('hidden');
+                if (AuthClient.isPro()) {
+                    planBadge.textContent = 'Pro';
+                    planBadge.className = 'plan-badge plan-pro';
+                } else {
+                    planBadge.textContent = 'Free';
+                    planBadge.className = 'plan-badge plan-free';
+                }
+            }
+        } else {
+            authForm?.classList.remove('hidden');
+            accountInfo?.classList.add('hidden');
+            planBadge?.classList.add('hidden');
+        }
+    },
+
+    /**
+     * Handle login
+     */
+    async handleLogin() {
+        const email = document.getElementById('auth-email')?.value.trim();
+        const password = document.getElementById('auth-password')?.value;
+        const statusEl = document.getElementById('auth-status');
+        const statusText = document.getElementById('auth-status-text');
+        const btn = document.getElementById('auth-login-btn');
+
+        if (!email || !password) return;
+
+        btn.textContent = 'Conectando...';
+        btn.disabled = true;
+
+        const result = await AuthClient.signIn(email, password);
+
+        btn.textContent = 'Iniciar sesion';
+        btn.disabled = false;
+
+        if (result.ok) {
+            await AuthClient.getProfile();
+            this.updateAuthUI();
+            statusEl?.classList.add('hidden');
+        } else {
+            if (statusText) { statusText.textContent = result.error; statusText.style.color = 'var(--danger)'; }
+            statusEl?.classList.remove('hidden');
+        }
+    },
+
+    /**
+     * Handle signup
+     */
+    async handleSignup() {
+        const email = document.getElementById('auth-email')?.value.trim();
+        const password = document.getElementById('auth-password')?.value;
+        const statusEl = document.getElementById('auth-status');
+        const statusText = document.getElementById('auth-status-text');
+        const btn = document.getElementById('auth-signup-btn');
+
+        if (!email || !password) return;
+        if (password.length < 6) {
+            if (statusText) { statusText.textContent = 'La contrasena debe tener al menos 6 caracteres'; statusText.style.color = 'var(--danger)'; }
+            statusEl?.classList.remove('hidden');
+            return;
+        }
+
+        btn.textContent = 'Creando...';
+        btn.disabled = true;
+
+        const result = await AuthClient.signUp(email, password);
+
+        btn.textContent = 'Registrarse';
+        btn.disabled = false;
+
+        if (result.ok) {
+            // Auto-login after signup
+            await AuthClient.signIn(email, password);
+            await AuthClient.getProfile();
+            this.updateAuthUI();
+            statusEl?.classList.add('hidden');
+        } else {
+            if (statusText) { statusText.textContent = result.error; statusText.style.color = 'var(--danger)'; }
+            statusEl?.classList.remove('hidden');
+        }
+    },
+
+    /**
+     * Handle logout
+     */
+    async handleLogout() {
+        await AuthClient.signOut();
+        this.updateAuthUI();
+    },
+
+    /**
+     * Refresh plan status (for users who just paid)
+     */
+    async refreshPlanStatus() {
+        if (typeof AuthClient === 'undefined' || !AuthClient.isLoggedIn()) return;
+
+        const btn = document.getElementById('refresh-plan-btn');
+        if (btn) { btn.textContent = 'Verificando...'; btn.disabled = true; }
+
+        await AuthClient.getProfile();
+        this.updateAuthUI();
+
+        if (btn) { btn.textContent = 'Actualizar estado del plan'; btn.disabled = false; }
+    },
+
+    /**
+     * Open Stripe checkout
+     */
+    openUpgrade() {
+        if (typeof AuthClient === 'undefined') return;
+
+        if (!AuthClient.isLoggedIn()) {
+            this.setState('settings');
+            return;
+        }
+
+        const url = AuthClient.getCheckoutUrl('monthly');
+        this.openExternalLink(url);
+    },
+
+    /**
+     * Show upgrade banner in review state
+     */
+    showUpgradeBanner() {
+        const banner = document.getElementById('upgrade-banner');
+        if (banner) banner.classList.remove('hidden');
+    },
+
+    /**
+     * Hide upgrade banner
+     */
+    hideUpgradeBanner() {
+        const banner = document.getElementById('upgrade-banner');
+        if (banner) banner.classList.add('hidden');
     }
 };
 

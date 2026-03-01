@@ -103,7 +103,7 @@ const DebugLogger = {
 /**
  * Initialize the extension
  */
-function init() {
+async function init() {
     // Initialize Debug Logger first
     DebugLogger.init();
 
@@ -259,6 +259,11 @@ function init() {
 
     // Also handle browser unload
     window.addEventListener('beforeunload', handlePanelClose);
+
+    // Initialize auth (load session, refresh token, fetch profile)
+    if (typeof AuthClient !== 'undefined') {
+        await AuthClient.init();
+    }
 
     // Initialize UI controller
     UIController.init();

@@ -22,7 +22,10 @@
         <!-- Estado 1: Setup -->
         <section id="setup-state" class="state active">
             <header class="panel-header">
-                <h1>AutoClipper</h1>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <h1>AutoClipper</h1>
+                    <span id="plan-badge" class="plan-badge plan-free hidden">Free</span>
+                </div>
                 <button id="settings-btn" class="icon-btn" title="Configuracion">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z"/>
@@ -124,6 +127,20 @@
 
                 <div id="progress-dots" class="progress-dots">
                     <!-- Dots generados dinamicamente -->
+                </div>
+
+                <div id="upgrade-banner" class="upgrade-banner hidden">
+                    <div class="upgrade-banner-icon">PRO</div>
+                    <p class="upgrade-banner-text">
+                        Has aprobado todos los clips gratuitos.<br>
+                        <strong>Upgrade a Pro</strong> para generar secuencias ilimitadas.
+                    </p>
+                    <button id="upgrade-banner-btn" class="primary-btn upgrade-btn">
+                        Desbloquear clips ilimitados
+                    </button>
+                    <button id="upgrade-banner-login" class="secondary-btn">
+                        Ya tengo cuenta
+                    </button>
                 </div>
             </div>
         </section>
@@ -275,6 +292,45 @@
             </header>
 
             <div class="content">
+                <!-- Account Section -->
+                <div id="account-section" class="account-section">
+                    <label class="input-label">Cuenta:</label>
+
+                    <div id="auth-form" class="auth-form">
+                        <input type="email" id="auth-email" class="text-input" placeholder="Email">
+                        <input type="password" id="auth-password" class="text-input" placeholder="Contrasena" style="margin-top: 8px;">
+                        <div style="margin-top: 8px; display: flex; gap: 8px;">
+                            <button id="auth-login-btn" class="primary-btn" style="flex: 1;">Iniciar sesion</button>
+                            <button id="auth-signup-btn" class="secondary-btn" style="flex: 1;">Registrarse</button>
+                        </div>
+                        <div id="auth-status" class="info-bar hidden" style="margin-top: 8px;">
+                            <span id="auth-status-text"></span>
+                        </div>
+                        <p class="tip" style="margin-top: 8px;">
+                            Crea una cuenta para generar secuencias ilimitadas.<br>
+                            Sin cuenta = 3 clips gratis por analisis.
+                        </p>
+                    </div>
+
+                    <div id="account-info" class="account-info hidden">
+                        <div class="account-card">
+                            <span id="account-email" class="account-email">user@email.com</span>
+                            <span id="account-plan-badge" class="plan-badge plan-free">Free</span>
+                        </div>
+                        <button id="upgrade-btn" class="primary-btn upgrade-btn" style="margin-top: 8px;">
+                            Upgrade a Pro
+                        </button>
+                        <button id="refresh-plan-btn" class="secondary-btn" style="margin-top: 8px;">
+                            Actualizar estado del plan
+                        </button>
+                        <button id="auth-logout-btn" class="secondary-btn" style="margin-top: 8px;">
+                            Cerrar sesion
+                        </button>
+                    </div>
+                </div>
+
+                <hr class="settings-divider">
+
                 <label class="input-label">Backend de IA:</label>
                 <div class="backend-selector">
                     <button id="backend-openrouter" class="backend-btn active" data-backend="openrouter">
@@ -331,6 +387,7 @@
     <script src="js/modules/srt-parser.js"></script>
     <script src="js/modules/openrouter-client.js"></script>
     <script src="js/modules/ollama-client.js"></script>
+    <script src="js/modules/auth-client.js"></script>
     <script src="js/modules/ui-controller.js"></script>
     <script src="js/main.js"></script>
 </body>
