@@ -65,6 +65,50 @@ serve(async (req: Request) => {
       }
 
       console.log(`User ${supabaseUserId} upgraded to Pro`);
+
+      // ─── Referral commission tracking ─────────────────────────────
+      try {
+        const { data: buyerProfile } = await supabase
+          .from("profiles")
+          .select("referred_by")
+          .eq("id", supabaseUserId)
+          .single();
+
+        if (buyerProfile?.referred_by) {
+          const { data: affiliate } = await supabase
+            .from("profiles")
+            .select("id")
+            .eq("referral_code", buyerProfile.referred_by)
+            .eq("is_affiliate", true)
+            .single();
+
+          if (affiliate && affiliate.id !== supabaseUserId) {
+            const amountCents = session.amount_total || 0;
+            const commissionCents = Math.round(amountCents * 0.20);
+
+            const { error: commError } = await supabase
+              .from("commissions")
+              .insert({
+                affiliate_id: affiliate.id,
+                referred_user_id: supabaseUserId,
+                stripe_checkout_session_id: session.id,
+                amount_cents: amountCents,
+                commission_cents: commissionCents,
+                status: "pending",
+              });
+
+            if (commError) {
+              console.error("Failed to create commission:", commError);
+            } else {
+              console.log(
+                `Commission: ${commissionCents}c for affiliate ${affiliate.id}`
+              );
+            }
+          }
+        }
+      } catch (refErr) {
+        console.error("Referral tracking error:", refErr);
+      }
     }
   }
 

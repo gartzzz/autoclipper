@@ -51,15 +51,20 @@ const AuthClient = {
      * Sign up with email and password
      * @returns {{ ok: boolean, error?: string }}
      */
-    async signUp(email, password) {
+    async signUp(email, password, referralCode) {
         try {
+            const bodyData = { email, password };
+            if (referralCode && referralCode.trim()) {
+                bodyData.data = { referred_by: referralCode.trim().toLowerCase() };
+            }
+
             const res = await fetch(`${this.SUPABASE_URL}/auth/v1/signup`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'apikey': this.SUPABASE_ANON_KEY
                 },
-                body: JSON.stringify({ email, password })
+                body: JSON.stringify(bodyData)
             });
 
             const data = await res.json();
@@ -245,6 +250,39 @@ const AuthClient = {
         const user = this.getUser();
         if (!user) return link;
         return `${link}?prefilled_email=${encodeURIComponent(user.email)}&client_reference_id=${user.id}`;
+    },
+
+    // ─── Affiliate ───────────────────────────────────────────────────────
+
+    /**
+     * Fetch affiliate stats (only works if user is an affiliate)
+     */
+    async getAffiliateStats() {
+        if (!this._session?.access_token) {
+            return { ok: false, error: 'No hay sesion' };
+        }
+
+        try {
+            const res = await fetch(
+                `${this.SUPABASE_URL}/functions/v1/affiliate-stats`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this._session.access_token}`,
+                        'apikey': this.SUPABASE_ANON_KEY
+                    }
+                }
+            );
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                return { ok: false, error: data.error || 'Error al obtener estadisticas' };
+            }
+
+            return { ok: true, data };
+        } catch (err) {
+            return { ok: false, error: 'Error de conexion' };
+        }
     },
 
     // ─── Persistence ─────────────────────────────────────────────────────

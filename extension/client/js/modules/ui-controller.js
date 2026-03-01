@@ -1264,6 +1264,7 @@ const UIController = {
     async handleSignup() {
         const email = document.getElementById('auth-email')?.value.trim();
         const password = document.getElementById('auth-password')?.value;
+        const referralCode = document.getElementById('auth-referral')?.value.trim();
         const statusEl = document.getElementById('auth-status');
         const statusText = document.getElementById('auth-status-text');
         const btn = document.getElementById('auth-signup-btn');
@@ -1278,7 +1279,7 @@ const UIController = {
         btn.textContent = 'Creando...';
         btn.disabled = true;
 
-        const result = await AuthClient.signUp(email, password);
+        const result = await AuthClient.signUp(email, password, referralCode);
 
         btn.textContent = 'Registrarse';
         btn.disabled = false;
