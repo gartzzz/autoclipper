@@ -857,6 +857,26 @@ function testExtendScript() {
     }
 }
 
+/**
+ * Open file dialog for SRT/VTT/TXT import
+ * @returns {string} Absolute path to selected file, or empty string if cancelled
+ */
+function openSRTDialog() {
+    try {
+        var f = File.openDialog(
+            'Seleccionar archivo de transcripcion',
+            'Subtitles:*.srt;*.vtt;*.txt'
+        );
+        if (f && f.exists) {
+            return f.fsName;
+        }
+        return '';
+    } catch (e) {
+        $.writeln('[AutoClipper] openSRTDialog error: ' + e.message);
+        return '';
+    }
+}
+
 // Log initialization
 try {
     $.writeln('[AutoClipper] ExtendScript loaded successfully');

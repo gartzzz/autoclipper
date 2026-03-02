@@ -1161,6 +1161,55 @@ body {
     opacity: 0.9;
 }
 
+/* Free-tier notice on Setup screen */
+.free-tier-notice {
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    border-radius: var(--radius);
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.free-tier-notice a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.free-tier-notice a:hover {
+    text-decoration: underline;
+}
+
+/* Upgrade banner header row (icon + dismiss button) */
+.upgrade-banner-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.upgrade-banner-header .upgrade-banner-icon {
+    margin-bottom: 0;
+}
+
+.upgrade-banner-dismiss {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: color 0.15s;
+}
+
+.upgrade-banner-dismiss:hover {
+    color: var(--text-primary);
+}
+
 /* Utilities */
 .hidden {
     display: none !important;

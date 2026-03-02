@@ -103,7 +103,7 @@ const OpenRouterClient = {
     /**
      * Analyze transcript for viral moments
      */
-    async analyzeTranscript(segments, options = {}, onProgress = null) {
+    async analyzeTranscript(segments, options = {}, onProgress = null, signal = null) {
         const apiKey = this.getApiKey();
         if (!apiKey) {
             throw new Error('API key not configured');
@@ -149,7 +149,7 @@ const OpenRouterClient = {
         const userPrompt = this.buildUserPrompt(transcript, promptOptions);
 
         try {
-            const response = await fetch(this.apiUrl, {
+            const fetchOptions = {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
@@ -166,7 +166,9 @@ const OpenRouterClient = {
                     temperature: 0.7,
                     max_tokens: 4096
                 })
-            });
+            };
+            if (signal) fetchOptions.signal = signal;
+            const response = await fetch(this.apiUrl, fetchOptions);
 
             onProgress?.({
                 progress: 70,

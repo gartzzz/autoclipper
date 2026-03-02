@@ -3,14 +3,12 @@
  * Manages state transitions and UI updates for AutoClipper panel
  */
 
-const FREE_CLIP_LIMIT = 3;
+// Tier enforcement disabled — everything is free for now. Re-enable when Stripe is ready.
+const FREE_CLIP_LIMIT = Infinity;
 
 const UIController = {
     // Current state
     currentState: 'setup',
-
-    // Backend: 'openrouter' or 'ollama'
-    currentBackend: 'openrouter',
 
     // Data
     segments: [],
@@ -18,13 +16,20 @@ const UIController = {
     approvedClips: [],
     currentClipIndex: 0,
 
-    // Model status (Ollama)
-    _isKeepWarmActive: false,
-    _keepWarmInterval: null,
-    _modelCheckInterval: null,
-
     // DOM elements (cached on init)
     elements: {},
+
+    // AbortController for cancelling in-flight analysis
+    _analysisController: null,
+
+    /**
+     * Escape HTML to prevent XSS from LLM-generated content
+     */
+    _escHtml(s) {
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
+    },
 
     /**
      * Initialize the UI controller
@@ -33,12 +38,11 @@ const UIController = {
         this.cacheElements();
         this.bindEvents();
         this.bindKeyboardShortcuts();
-        this.loadBackendPreference();
 
         // Update auth UI
         this.updateAuthUI();
 
-        // Check if configured based on backend
+        // Check if configured
         if (!this.isBackendConfigured()) {
             this.setState('settings');
         } else {
@@ -47,21 +51,17 @@ const UIController = {
     },
 
     /**
-     * Check if current backend is configured
+     * Check if backend is configured
      */
     isBackendConfigured() {
-        if (this.currentBackend === 'ollama') {
-            return OllamaClient.isConfigured();
-        } else {
-            return OpenRouterClient.hasApiKey();
-        }
+        return OpenRouterClient.hasApiKey();
     },
 
     /**
-     * Get current AI client based on selected backend
+     * Get AI client
      */
     getAIClient() {
-        return this.currentBackend === 'ollama' ? OllamaClient : OpenRouterClient;
+        return OpenRouterClient;
     },
 
     /**
@@ -81,6 +81,7 @@ const UIController = {
             // Setup
             transcriptInput: document.getElementById('transcript-input'),
             transcriptDrop: document.getElementById('transcript-drop'),
+            importSrtBtn: document.getElementById('import-srt-btn'),
             transcriptInfo: document.getElementById('transcript-info'),
             wordCount: document.getElementById('word-count'),
             analyzeBtn: document.getElementById('analyze-btn'),
@@ -138,22 +139,7 @@ const UIController = {
             saveKeyBtn: document.getElementById('save-key-btn'),
             keyStatus: document.getElementById('key-status'),
             backFromSettings: document.getElementById('back-from-settings'),
-            getKeyLink: document.getElementById('get-key-link'),
-
-            // Backend selector
-            backendOpenrouter: document.getElementById('backend-openrouter'),
-            backendOllama: document.getElementById('backend-ollama'),
-            openrouterConfig: document.getElementById('openrouter-config'),
-            ollamaConfig: document.getElementById('ollama-config'),
-            ollamaUrlInput: document.getElementById('ollama-url-input'),
-            ollamaModelSelect: document.getElementById('ollama-model-select'),
-            refreshModelsBtn: document.getElementById('refresh-models-btn'),
-
-            // Model status indicator (Ollama only)
-            modelStatus: document.getElementById('model-status'),
-            modelStatusDot: document.getElementById('model-status-dot'),
-            modelStatusText: document.getElementById('model-status-text'),
-            modelPowerBtn: document.getElementById('model-power-btn')
+            getKeyLink: document.getElementById('get-key-link')
         };
     },
 
@@ -166,6 +152,9 @@ const UIController = {
         // Transcript input
         elements.transcriptInput.addEventListener('input', () => this.onTranscriptChange());
         elements.transcriptInput.addEventListener('paste', (e) => this.onTranscriptPaste(e));
+
+        // Import SRT from file dialog
+        elements.importSrtBtn.addEventListener('click', () => this.importSRT());
 
         // Drag and drop
         elements.transcriptDrop.addEventListener('dragover', (e) => {
@@ -203,11 +192,30 @@ const UIController = {
         // Cancel analysis
         elements.cancelAnalysis.addEventListener('click', () => this.cancelAnalysis());
 
+        // Progress dots — delegated click handler (avoids listener leak on re-render)
+        elements.progressDots.addEventListener('click', (e) => {
+            const dot = e.target.closest('.dot');
+            if (dot) {
+                const index = parseInt(dot.dataset.index);
+                if (!isNaN(index)) this.goToClip(index);
+            }
+        });
+
         // Settings actions
         elements.saveKeyBtn.addEventListener('click', () => this.saveSettings());
         elements.backFromSettings.addEventListener('click', () => {
             if (this.isBackendConfigured()) {
                 this.setState('setup');
+            } else {
+                // Surface a clear inline message rather than silently doing nothing
+                const keyStatus = this.elements.keyStatus;
+                keyStatus.innerHTML = '<span style="color: var(--warning);">Guarda una configuracion valida antes de continuar.</span>';
+                keyStatus.classList.remove('hidden');
+                // Briefly shake the save button to direct attention
+                this.elements.saveKeyBtn.style.outline = '2px solid var(--warning)';
+                setTimeout(() => {
+                    this.elements.saveKeyBtn.style.outline = '';
+                }, 1500);
             }
         });
         elements.getKeyLink.addEventListener('click', (e) => {
@@ -221,19 +229,6 @@ const UIController = {
                 this.saveSettings();
             }
         });
-
-        // Backend selector
-        elements.backendOpenrouter.addEventListener('click', () => this.selectBackend('openrouter'));
-        elements.backendOllama.addEventListener('click', () => this.selectBackend('ollama'));
-
-        // Ollama controls
-        elements.refreshModelsBtn.addEventListener('click', () => this.refreshOllamaModels());
-        elements.ollamaModelSelect.addEventListener('change', (e) => {
-            OllamaClient.setModel(e.target.value);
-        });
-
-        // Model power button (keep warm / unload)
-        elements.modelPowerBtn?.addEventListener('click', () => this.toggleKeepWarm());
 
         // Export help - open AutoClipper bin
         document.getElementById('open-bin-btn')?.addEventListener('click', () => {
@@ -254,203 +249,14 @@ const UIController = {
         document.getElementById('upgrade-btn')?.addEventListener('click', () => this.openUpgrade());
         document.getElementById('upgrade-banner-btn')?.addEventListener('click', () => this.openUpgrade());
         document.getElementById('upgrade-banner-login')?.addEventListener('click', () => this.setState('settings'));
+        document.getElementById('upgrade-banner-dismiss')?.addEventListener('click', () => this.hideUpgradeBanner());
         document.getElementById('refresh-plan-btn')?.addEventListener('click', () => this.refreshPlanStatus());
-    },
 
-    /**
-     * Select backend
-     */
-    selectBackend(backend) {
-        const { elements } = this;
-        this.currentBackend = backend;
-
-        // Update buttons
-        elements.backendOpenrouter.classList.toggle('active', backend === 'openrouter');
-        elements.backendOllama.classList.toggle('active', backend === 'ollama');
-
-        // Show/hide config panels
-        elements.openrouterConfig.classList.toggle('hidden', backend !== 'openrouter');
-        elements.ollamaConfig.classList.toggle('hidden', backend !== 'ollama');
-
-        // Show/hide model status indicator (Ollama only)
-        if (backend === 'ollama') {
-            elements.modelStatus?.classList.remove('hidden');
-            this.startModelStatusPolling();
-        } else {
-            elements.modelStatus?.classList.add('hidden');
-            this.stopModelStatusPolling();
-        }
-
-        // Save preference
-        if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('autoclipper_backend', backend);
-        }
-
-        // If switching to Ollama, auto-detect models
-        if (backend === 'ollama') {
-            this.refreshOllamaModels();
-        }
-    },
-
-    /**
-     * Load saved backend preference
-     */
-    loadBackendPreference() {
-        if (typeof localStorage !== 'undefined') {
-            const saved = localStorage.getItem('autoclipper_backend');
-            if (saved === 'ollama') {
-                this.selectBackend('ollama');
-                // Load saved Ollama settings
-                const savedUrl = OllamaClient.getBaseUrl();
-                const savedModel = OllamaClient.getModel();
-                if (savedUrl) this.elements.ollamaUrlInput.value = savedUrl;
-                if (savedModel) {
-                    // Will be selected after model list loads
-                }
-            }
-        }
-    },
-
-    /**
-     * Refresh Ollama models list
-     */
-    async refreshOllamaModels() {
-        const { elements } = this;
-
-        // Update URL from input
-        OllamaClient.setBaseUrl(elements.ollamaUrlInput.value);
-
-        elements.refreshModelsBtn.textContent = 'Detectando...';
-        elements.refreshModelsBtn.disabled = true;
-
-        try {
-            const models = await OllamaClient.listModels();
-
-            elements.ollamaModelSelect.innerHTML = models.length === 0
-                ? '<option value="">-- No hay modelos --</option>'
-                : models.map(m => `<option value="${m.name}">${m.name}</option>`).join('');
-
-            // Select saved model if available
-            const savedModel = OllamaClient.getModel();
-            if (savedModel && models.some(m => m.name === savedModel)) {
-                elements.ollamaModelSelect.value = savedModel;
-            } else if (models.length > 0) {
-                // Auto-select first model
-                OllamaClient.setModel(models[0].name);
-            }
-
-            if (models.length === 0) {
-                elements.keyStatus.innerHTML = '<span style="color: var(--warning);">No hay modelos. Ejecuta: ollama pull qwen2.5:14b</span>';
-                elements.keyStatus.classList.remove('hidden');
-            }
-
-        } catch (error) {
-            elements.ollamaModelSelect.innerHTML = '<option value="">-- Error de conexion --</option>';
-            elements.keyStatus.innerHTML = '<span style="color: var(--danger);">Ollama no esta corriendo. Ejecuta: ollama serve</span>';
-            elements.keyStatus.classList.remove('hidden');
-        }
-
-        elements.refreshModelsBtn.textContent = 'Detectar modelos';
-        elements.refreshModelsBtn.disabled = false;
-    },
-
-    /**
-     * Start polling for model status (Ollama)
-     */
-    startModelStatusPolling() {
-        // Stop any existing polling
-        this.stopModelStatusPolling();
-
-        // Check immediately
-        this.updateModelStatus();
-
-        // Check every 30 seconds (only when on relevant screens)
-        this._modelCheckInterval = setInterval(() => {
-            if (this.currentState === 'setup' || this.currentState === 'settings') {
-                this.updateModelStatus();
-            }
-        }, 30000);
-    },
-
-    /**
-     * Stop model status polling
-     */
-    stopModelStatusPolling() {
-        if (this._modelCheckInterval) {
-            clearInterval(this._modelCheckInterval);
-            this._modelCheckInterval = null;
-        }
-        if (this._keepWarmInterval) {
-            clearInterval(this._keepWarmInterval);
-            this._keepWarmInterval = null;
-        }
-        this._isKeepWarmActive = false;
-    },
-
-    /**
-     * Update model status indicator
-     */
-    async updateModelStatus() {
-        const { elements } = this;
-        if (!elements.modelStatusDot || !elements.modelStatusText) return;
-
-        try {
-            const isLoaded = await OllamaClient.isModelLoaded();
-            const model = OllamaClient.getModel();
-
-            if (isLoaded) {
-                elements.modelStatusDot.className = 'status-dot loaded';
-                elements.modelStatusText.textContent = model ? `${model} cargado` : 'Modelo cargado';
-            } else {
-                elements.modelStatusDot.className = 'status-dot';
-                elements.modelStatusText.textContent = 'Modelo no cargado';
-            }
-
-            // Update power button state
-            elements.modelPowerBtn?.classList.toggle('active', this._isKeepWarmActive);
-
-        } catch (error) {
-            elements.modelStatusDot.className = 'status-dot';
-            elements.modelStatusText.textContent = 'Error de conexion';
-        }
-    },
-
-    /**
-     * Toggle keep warm mode
-     */
-    async toggleKeepWarm() {
-        const { elements } = this;
-
-        if (this._isKeepWarmActive) {
-            // Deactivate keep warm
-            if (this._keepWarmInterval) {
-                clearInterval(this._keepWarmInterval);
-                this._keepWarmInterval = null;
-            }
-            this._isKeepWarmActive = false;
-
-            // Unload model
-            await OllamaClient.unloadModel();
-            console.log('[AutoClipper] Model unloaded from GPU');
-
-        } else {
-            // Activate keep warm
-            this._isKeepWarmActive = true;
-
-            // Keep warm immediately
-            await OllamaClient.keepWarm();
-            console.log('[AutoClipper] Keep warm activated (30 min)');
-
-            // Refresh every 25 minutes to maintain warmth
-            this._keepWarmInterval = setInterval(async () => {
-                await OllamaClient.keepWarm();
-                console.log('[AutoClipper] Keep warm refreshed');
-            }, 25 * 60 * 1000);
-        }
-
-        // Update UI
-        elements.modelPowerBtn?.classList.toggle('active', this._isKeepWarmActive);
-        this.updateModelStatus();
+        // Free-tier notice login shortcut on Setup screen
+        document.getElementById('free-tier-login-link')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.setState('settings');
+        });
     },
 
     /**
@@ -469,71 +275,36 @@ const UIController = {
      */
     async saveSettings() {
         const { elements } = this;
+        const key = elements.apiKeyInput.value.trim();
 
-        if (this.currentBackend === 'ollama') {
-            // Save Ollama settings
-            OllamaClient.setBaseUrl(elements.ollamaUrlInput.value);
-            const model = elements.ollamaModelSelect.value;
+        if (!key) {
+            return;
+        }
 
-            if (!model) {
-                elements.keyStatus.innerHTML = '<span style="color: var(--danger);">Selecciona un modelo primero</span>';
-                elements.keyStatus.classList.remove('hidden');
-                return;
-            }
+        if (!key.startsWith('sk-or-')) {
+            elements.keyStatus.innerHTML = '<span style="color: var(--danger);">Key invalida (debe empezar con sk-or-)</span>';
+            elements.keyStatus.classList.remove('hidden');
+            return;
+        }
 
-            OllamaClient.setModel(model);
+        OpenRouterClient.setApiKey(key);
 
-            // Test connection
-            elements.saveKeyBtn.textContent = 'Verificando...';
-            elements.saveKeyBtn.disabled = true;
+        // Test the key
+        elements.saveKeyBtn.textContent = 'Verificando...';
+        elements.saveKeyBtn.disabled = true;
 
-            const health = await OllamaClient.checkHealth();
+        const health = await OpenRouterClient.checkHealth();
 
-            elements.saveKeyBtn.textContent = 'Guardar';
-            elements.saveKeyBtn.disabled = false;
+        elements.saveKeyBtn.textContent = 'Guardar';
+        elements.saveKeyBtn.disabled = false;
 
-            if (health.ok) {
-                elements.keyStatus.innerHTML = `<span class="check-icon">&#10003;</span> <span>${health.message}</span>`;
-                elements.keyStatus.classList.remove('hidden');
-                setTimeout(() => this.setState('setup'), 1000);
-            } else {
-                elements.keyStatus.innerHTML = `<span style="color: var(--danger);">${health.message}</span>`;
-                elements.keyStatus.classList.remove('hidden');
-            }
-
+        if (health.ok) {
+            elements.keyStatus.innerHTML = `<span class="check-icon">&#10003;</span> <span>${health.message}</span>`;
+            elements.keyStatus.classList.remove('hidden');
+            setTimeout(() => this.setState('setup'), 1000);
         } else {
-            // Save OpenRouter settings
-            const key = elements.apiKeyInput.value.trim();
-
-            if (!key) {
-                return;
-            }
-
-            if (!key.startsWith('sk-or-')) {
-                elements.keyStatus.innerHTML = '<span style="color: var(--danger);">Key invalida (debe empezar con sk-or-)</span>';
-                elements.keyStatus.classList.remove('hidden');
-                return;
-            }
-
-            OpenRouterClient.setApiKey(key);
-
-            // Test the key
-            elements.saveKeyBtn.textContent = 'Verificando...';
-            elements.saveKeyBtn.disabled = true;
-
-            const health = await OpenRouterClient.checkHealth();
-
-            elements.saveKeyBtn.textContent = 'Guardar';
-            elements.saveKeyBtn.disabled = false;
-
-            if (health.ok) {
-                elements.keyStatus.innerHTML = `<span class="check-icon">&#10003;</span> <span>${health.message}</span>`;
-                elements.keyStatus.classList.remove('hidden');
-                setTimeout(() => this.setState('setup'), 1000);
-            } else {
-                elements.keyStatus.innerHTML = `<span style="color: var(--danger);">${health.message}</span>`;
-                elements.keyStatus.classList.remove('hidden');
-            }
+            elements.keyStatus.innerHTML = `<span style="color: var(--danger);">${health.message}</span>`;
+            elements.keyStatus.classList.remove('hidden');
         }
     },
 
@@ -598,14 +369,34 @@ const UIController = {
                 this.elements.apiKeyInput.value = currentKey;
             }
 
-            // Load Ollama settings
-            const ollamaUrl = OllamaClient.getBaseUrl();
-            if (ollamaUrl) {
-                this.elements.ollamaUrlInput.value = ollamaUrl;
-            }
-
             // Clear status
             this.elements.keyStatus.classList.add('hidden');
+
+            // Show a one-time welcome hint for users who have no backend configured yet
+            const isFirstSetup = !this.isBackendConfigured();
+            let onboardingBanner = document.getElementById('settings-onboarding-banner');
+            if (!onboardingBanner) {
+                onboardingBanner = document.createElement('div');
+                onboardingBanner.id = 'settings-onboarding-banner';
+                onboardingBanner.style.cssText = [
+                    'padding: 10px 12px',
+                    'margin-bottom: 16px',
+                    'background: rgba(10,132,255,0.12)',
+                    'border: 1px solid rgba(10,132,255,0.4)',
+                    'border-radius: var(--radius)',
+                    'font-size: 11px',
+                    'color: var(--text-primary)',
+                    'line-height: 1.5'
+                ].join(';');
+                onboardingBanner.innerHTML = [
+                    '<strong>Bienvenido a AutoClipper.</strong><br>',
+                    'Para analizar transcripciones necesitas una API key de OpenRouter (gratis). ',
+                    'Pegala abajo y pulsa Guardar.'
+                ].join('');
+                const content = document.querySelector('#settings-state .content');
+                if (content) content.insertBefore(onboardingBanner, content.firstChild);
+            }
+            onboardingBanner.style.display = isFirstSetup ? 'block' : 'none';
 
             // Update auth section
             this.updateAuthUI();
@@ -660,8 +451,37 @@ const UIController = {
         }
     },
 
+    /**
+     * Import SRT/VTT/TXT file via native file dialog
+     */
+    importSRT() {
+        if (typeof csInterface === 'undefined') {
+            console.warn('[AutoClipper] File import only works inside Premiere Pro');
+            return;
+        }
+
+        csInterface.evalScript('openSRTDialog()', (filePath) => {
+            if (!filePath || filePath === 'EvalScript error.') return;
+
+            try {
+                const result = window.cep.fs.readFile(filePath);
+                if (result.err !== 0) {
+                    console.error('[AutoClipper] Failed to read file:', result.err);
+                    return;
+                }
+                this.elements.transcriptInput.value = result.data;
+                this.onTranscriptChange();
+            } catch (err) {
+                console.error('[AutoClipper] importSRT error:', err);
+            }
+        });
+    },
+
     // Store last error for details view
     _lastError: null,
+
+    // Cancellation flag — set true when user cancels, checked before any post-analysis state change
+    _analysisCancelled: false,
 
     /**
      * Start analysis
@@ -673,6 +493,16 @@ const UIController = {
             return;
         }
 
+        // Abort any in-flight analysis
+        if (this._analysisController) {
+            this._analysisController.abort();
+        }
+        this._analysisController = new AbortController();
+
+        this._analysisCancelled = false;
+        this.viralClips = [];
+        this.approvedClips = [];
+        this.currentClipIndex = 0;
         this.setState('analyzing');
         this.elements.analysisProgress.style.width = '0%';
         this.elements.momentsFound.textContent = '0 momentos encontrados';
@@ -684,6 +514,7 @@ const UIController = {
         this._contextInfoShown = false;
 
         const client = this.getAIClient();
+        const signal = this._analysisController.signal;
 
         try {
             // Analyze transcript
@@ -735,8 +566,12 @@ const UIController = {
                         this.elements.momentsFound.textContent = progress.warning;
                         this.elements.momentsFound.style.color = '#f39c12';
                     }
-                }
+                },
+                signal
             );
+
+            // User cancelled while the request was in flight — discard result silently
+            if (this._analysisCancelled) return;
 
             if (this.viralClips.length === 0) {
                 throw new Error('No se encontraron momentos virales');
@@ -749,6 +584,9 @@ const UIController = {
             this.setState('review');
 
         } catch (error) {
+            // Don't show error if the user already cancelled and moved on
+            if (this._analysisCancelled || error.name === 'AbortError') return;
+
             this._lastError = error;
             this.elements.errorMessage.textContent = error.message;
 
@@ -783,8 +621,24 @@ const UIController = {
      * Cancel ongoing analysis
      */
     cancelAnalysis() {
-        // OpenRouter doesn't support cancel, just go back
+        // Abort the fetch request
+        if (this._analysisController) {
+            this._analysisController.abort();
+            this._analysisController = null;
+        }
+        // Signal the in-flight promise to discard its result if it resolves later
+        this._analysisCancelled = true;
         this.setState('setup');
+
+        // Show a brief confirmation that cancel was acknowledged, since the
+        // transcript is still loaded and ready to re-analyze
+        const info = this.elements.transcriptInfo;
+        if (info && !info.classList.contains('hidden')) {
+            const wordCountEl = this.elements.wordCount;
+            const original = wordCountEl.textContent;
+            wordCountEl.textContent = 'Analisis cancelado — transcripcion lista.';
+            setTimeout(() => { wordCountEl.textContent = original; }, 2500);
+        }
     },
 
     /**
@@ -850,14 +704,6 @@ const UIController = {
         }).join('');
 
         this.elements.progressDots.innerHTML = dots;
-
-        // Make dots clickable
-        this.elements.progressDots.querySelectorAll('.dot').forEach(dot => {
-            dot.addEventListener('click', (e) => {
-                const index = parseInt(e.target.dataset.index);
-                this.goToClip(index);
-            });
-        });
     },
 
     /**
@@ -960,8 +806,14 @@ const UIController = {
         }
 
         // Call ExtendScript to set playhead and play
+        const start = parseFloat(clip.startTime);
+        const end = parseFloat(clip.endTime);
+        if (!isFinite(start) || !isFinite(end)) {
+            console.warn('[AutoClipper] Invalid clip times:', clip.startTime, clip.endTime);
+            return;
+        }
         if (typeof csInterface !== 'undefined') {
-            csInterface.evalScript(`playClipRange(${clip.startTime}, ${clip.endTime})`, (result) => {
+            csInterface.evalScript(`playClipRange(${start}, ${end})`, (result) => {
                 console.log('[AutoClipper] playClipRange result:', result);
                 this.addDebugLog(`playClipRange: ${result}`);
             });
@@ -1011,15 +863,13 @@ const UIController = {
         const rejectedCount = this.viralClips.filter(clip => clip.rejected).length;
 
         if (this.approvedClips.length === 0) {
-            let msg = 'No aprobaste ningun clip.';
-            if (skippedCount > 0) {
-                msg += ` Tienes ${skippedCount} sin revisar (usa flechas arriba/abajo para navegar).`;
-            } else {
-                msg += ' Vuelve a revisar.';
-            }
-            alert(msg);
-            this.currentClipIndex = 0;
-            this.updateReviewUI();
+            // Stay in review, show an inline warning — do NOT reset the clip index
+            // so the user stays where they were when they triggered finishReview
+            this.showReviewWarning(
+                skippedCount > 0
+                    ? `Aprueba al menos un clip para continuar. (${skippedCount} sin revisar — usa ↑↓ para navegar)`
+                    : 'Aprueba al menos un clip para continuar.'
+            );
             return;
         }
 
@@ -1040,7 +890,7 @@ const UIController = {
             return `
             <div class="approved-item">
                 <span class="check">&#10003;</span>
-                <span class="title">${starPrefix}${clip.suggestedTitle || 'Clip'}</span>
+                <span class="title">${starPrefix}${this._escHtml(clip.suggestedTitle || 'Clip')}</span>
                 <span class="preset-badge">&#9889;</span>
             </div>
         `;
@@ -1050,10 +900,12 @@ const UIController = {
     },
 
     /**
-     * Go back to review from generate
+     * Go back to review from generate.
+     * Preserve the current clip index so the user lands on the last clip
+     * they were viewing rather than being reset to the start.
      */
     goBackToReview() {
-        this.currentClipIndex = 0;
+        // Do not reset currentClipIndex — the user should land where they left off
         this.updateReviewUI();
         this.setState('review');
     },
@@ -1064,15 +916,21 @@ const UIController = {
     async startGeneration() {
         // Check if host script is loaded
         if (typeof isHostScriptLoaded === 'function' && !isHostScriptLoaded()) {
-            alert('Error: ExtendScript no esta cargado.\n\nLas funciones de Premiere no estan disponibles.\nRevisa el panel de Debug para mas informacion.');
             this.addDebugLog('Generacion bloqueada: ExtendScript no cargado');
+            this._lastError = new Error('ExtendScript no esta cargado. Cierra y vuelve a abrir el panel de AutoClipper en Premiere.');
+            this.elements.errorMessage.textContent = this._lastError.message;
+            this.elements.errorDetails.classList.add('hidden');
+            this.elements.showDetailsBtn.classList.add('hidden');
+            this.setState('error');
             return;
         }
 
         this.setState('generating');
         this.elements.generationProgress.style.width = '0%';
 
-        const preset = this.elements.subtitlePreset.value;
+        const VALID_PRESETS = ['viral_yellow', 'minimal_white', 'none'];
+        const rawPreset = this.elements.subtitlePreset.value;
+        const preset = VALID_PRESETS.includes(rawPreset) ? rawPreset : 'none';
         const total = this.approvedClips.length;
 
         // Initial list - all pending
@@ -1080,7 +938,7 @@ const UIController = {
             <div class="generation-item" id="gen-item-${i}">
                 <span class="status-icon pending">○</span>
                 <div>
-                    <div class="title">${clip.suggestedTitle || `Clip ${i + 1}`}</div>
+                    <div class="title">${this._escHtml(clip.suggestedTitle || `Clip ${i + 1}`)}</div>
                     <div class="subtitle">Esperando...</div>
                 </div>
             </div>
@@ -1193,6 +1051,12 @@ const UIController = {
         const accountInfo = document.getElementById('account-info');
         const planBadge = document.getElementById('plan-badge');
         const upgradeBtn = document.getElementById('upgrade-btn');
+        const freeTierNotice = document.getElementById('free-tier-notice');
+
+        // Hide upgrade/tier UI — no Pro tier yet
+        upgradeBtn?.classList.add('hidden');
+        freeTierNotice?.classList.add('hidden');
+        planBadge?.classList.add('hidden');
 
         if (AuthClient.isLoggedIn()) {
             authForm?.classList.add('hidden');
@@ -1200,31 +1064,9 @@ const UIController = {
 
             const emailEl = document.getElementById('account-email');
             if (emailEl) emailEl.textContent = AuthClient.getUser()?.email || '';
-
-            const badge = document.getElementById('account-plan-badge');
-            if (AuthClient.isPro()) {
-                if (badge) { badge.textContent = 'Pro'; badge.className = 'plan-badge plan-pro'; }
-                upgradeBtn?.classList.add('hidden');
-            } else {
-                if (badge) { badge.textContent = 'Free'; badge.className = 'plan-badge plan-free'; }
-                upgradeBtn?.classList.remove('hidden');
-            }
-
-            // Setup state badge
-            if (planBadge) {
-                planBadge.classList.remove('hidden');
-                if (AuthClient.isPro()) {
-                    planBadge.textContent = 'Pro';
-                    planBadge.className = 'plan-badge plan-pro';
-                } else {
-                    planBadge.textContent = 'Free';
-                    planBadge.className = 'plan-badge plan-free';
-                }
-            }
         } else {
             authForm?.classList.remove('hidden');
             accountInfo?.classList.add('hidden');
-            planBadge?.classList.add('hidden');
         }
     },
 
@@ -1286,10 +1128,16 @@ const UIController = {
 
         if (result.ok) {
             // Auto-login after signup
-            await AuthClient.signIn(email, password);
-            await AuthClient.getProfile();
-            this.updateAuthUI();
-            statusEl?.classList.add('hidden');
+            const loginResult = await AuthClient.signIn(email, password);
+            if (loginResult.ok) {
+                await AuthClient.getProfile();
+                this.updateAuthUI();
+                statusEl?.classList.add('hidden');
+            } else {
+                // Signup succeeded but auto-login failed (e.g. email confirmation required)
+                if (statusText) { statusText.textContent = 'Registro exitoso. Revisa tu correo para confirmar.'; statusText.style.color = 'var(--success, #22c55e)'; }
+                statusEl?.classList.remove('hidden');
+            }
         } else {
             if (statusText) { statusText.textContent = result.error; statusText.style.color = 'var(--danger)'; }
             statusEl?.classList.remove('hidden');
@@ -1348,6 +1196,46 @@ const UIController = {
     hideUpgradeBanner() {
         const banner = document.getElementById('upgrade-banner');
         if (banner) banner.classList.add('hidden');
+    },
+
+    /**
+     * Show an inline warning message in the review state without blocking the UI.
+     * The message auto-dismisses after 4 seconds.
+     * @param {string} message
+     */
+    showReviewWarning(message) {
+        let warningEl = document.getElementById('review-warning-bar');
+        if (!warningEl) {
+            warningEl = document.createElement('div');
+            warningEl.id = 'review-warning-bar';
+            warningEl.style.cssText = [
+                'padding: 8px 12px',
+                'margin: 0 0 12px 0',
+                'background: rgba(255,187,51,0.15)',
+                'border: 1px solid var(--warning)',
+                'border-radius: var(--radius)',
+                'font-size: 11px',
+                'color: var(--warning)',
+                'line-height: 1.4',
+                'transition: opacity 0.3s'
+            ].join(';');
+
+            // Insert above the action buttons
+            const actionButtons = document.querySelector('.action-buttons');
+            if (actionButtons) {
+                actionButtons.parentNode.insertBefore(warningEl, actionButtons);
+            }
+        }
+
+        warningEl.textContent = message;
+        warningEl.style.opacity = '1';
+        warningEl.style.display = 'block';
+
+        clearTimeout(this._reviewWarningTimer);
+        this._reviewWarningTimer = setTimeout(() => {
+            warningEl.style.opacity = '0';
+            setTimeout(() => { warningEl.style.display = 'none'; }, 300);
+        }, 4000);
     }
 };
 

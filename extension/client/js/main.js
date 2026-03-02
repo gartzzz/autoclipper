@@ -337,11 +337,7 @@ function darken(color, amount) {
  * Check connection to AI backend
  */
 async function checkServerConnection() {
-    // Get the configured backend from UIController
-    const backend = UIController.currentBackend || 'openrouter';
-    const client = backend === 'ollama' ? OllamaClient : OpenRouterClient;
-
-    const health = await client.checkHealth();
+    const health = await OpenRouterClient.checkHealth();
 
     if (!health.ok) {
         console.warn('AI backend not ready:', health.message);
@@ -377,24 +373,6 @@ function evalScript(script) {
  */
 function handlePanelClose() {
     console.log('[AutoClipper] Panel closing, cleaning up...');
-
-    // Stop model status polling regardless of backend
-    UIController.stopModelStatusPolling();
-
-    // Clean up keep-warm if active
-    if (UIController._isKeepWarmActive) {
-        if (UIController._keepWarmInterval) {
-            clearInterval(UIController._keepWarmInterval);
-            UIController._keepWarmInterval = null;
-        }
-        UIController._isKeepWarmActive = false;
-
-        // Only unload if we were actually using Ollama
-        if (UIController.currentBackend === 'ollama') {
-            OllamaClient.unloadModel();
-            console.log('[AutoClipper] Model unloaded from GPU');
-        }
-    }
 }
 
 // Initialize when DOM is ready
