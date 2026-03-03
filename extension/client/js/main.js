@@ -260,11 +260,6 @@ async function init() {
     // Also handle browser unload
     window.addEventListener('beforeunload', handlePanelClose);
 
-    // Initialize auth (load session, refresh token, fetch profile)
-    if (typeof AuthClient !== 'undefined') {
-        await AuthClient.init();
-    }
-
     // Initialize UI controller
     UIController.init();
 
@@ -334,10 +329,11 @@ function darken(color, amount) {
 }
 
 /**
- * Check connection to AI backend
+ * Check connection to AI backend (supports OpenRouter and Ollama)
  */
 async function checkServerConnection() {
-    const health = await OpenRouterClient.checkHealth();
+    const client = UIController.getAIClient();
+    const health = await client.checkHealth();
 
     if (!health.ok) {
         console.warn('AI backend not ready:', health.message);

@@ -3,12 +3,12 @@
  * Manages state transitions and UI updates for AutoClipper panel
  */
 
-// Tier enforcement disabled — everything is free for now. Re-enable when Stripe is ready.
-const FREE_CLIP_LIMIT = Infinity;
-
 const UIController = {
     // Current state
     currentState: 'setup',
+
+    // Selected backend: 'openrouter' or 'ollama'
+    _currentBackend: 'openrouter',
 
     // Data
     segments: [],
@@ -35,12 +35,14 @@ const UIController = {
      * Initialize the UI controller
      */
     init() {
+        // Load saved backend preference
+        if (typeof localStorage !== 'undefined') {
+            this._currentBackend = localStorage.getItem('autoclipper_backend') || 'openrouter';
+        }
+
         this.cacheElements();
         this.bindEvents();
         this.bindKeyboardShortcuts();
-
-        // Update auth UI
-        this.updateAuthUI();
 
         // Check if configured
         if (!this.isBackendConfigured()) {
@@ -54,13 +56,19 @@ const UIController = {
      * Check if backend is configured
      */
     isBackendConfigured() {
+        if (this._currentBackend === 'ollama') {
+            return typeof OllamaClient !== 'undefined' && OllamaClient.isConfigured();
+        }
         return OpenRouterClient.hasApiKey();
     },
 
     /**
-     * Get AI client
+     * Get AI client based on selected backend
      */
     getAIClient() {
+        if (this._currentBackend === 'ollama') {
+            return OllamaClient;
+        }
         return OpenRouterClient;
     },
 
@@ -237,26 +245,12 @@ const UIController = {
             }
         });
 
-        // Auth events
-        document.getElementById('auth-login-btn')?.addEventListener('click', () => this.handleLogin());
-        document.getElementById('auth-signup-btn')?.addEventListener('click', () => this.handleSignup());
-        document.getElementById('auth-logout-btn')?.addEventListener('click', () => this.handleLogout());
-        document.getElementById('auth-password')?.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.handleLogin();
-        });
+        // Backend selector tabs
+        document.getElementById('backend-openrouter')?.addEventListener('click', () => this.switchBackend('openrouter'));
+        document.getElementById('backend-ollama')?.addEventListener('click', () => this.switchBackend('ollama'));
 
-        // Upgrade buttons
-        document.getElementById('upgrade-btn')?.addEventListener('click', () => this.openUpgrade());
-        document.getElementById('upgrade-banner-btn')?.addEventListener('click', () => this.openUpgrade());
-        document.getElementById('upgrade-banner-login')?.addEventListener('click', () => this.setState('settings'));
-        document.getElementById('upgrade-banner-dismiss')?.addEventListener('click', () => this.hideUpgradeBanner());
-        document.getElementById('refresh-plan-btn')?.addEventListener('click', () => this.refreshPlanStatus());
-
-        // Free-tier notice login shortcut on Setup screen
-        document.getElementById('free-tier-login-link')?.addEventListener('click', (e) => {
-            e.preventDefault();
-            this.setState('settings');
-        });
+        // Ollama-specific events
+        document.getElementById('detect-models-btn')?.addEventListener('click', () => this.detectOllamaModels());
     },
 
     /**
@@ -271,10 +265,74 @@ const UIController = {
     },
 
     /**
+     * Switch backend between OpenRouter and Ollama
+     */
+    switchBackend(backend) {
+        this._currentBackend = backend;
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('autoclipper_backend', backend);
+        }
+
+        // Update tab visuals
+        document.querySelectorAll('.backend-tab').forEach(tab => {
+            const isActive = tab.dataset.backend === backend;
+            tab.style.background = isActive ? 'var(--accent)' : 'var(--bg-secondary)';
+            tab.style.color = isActive ? '#fff' : 'var(--text-secondary)';
+        });
+
+        // Toggle config sections
+        const openrouterConfig = document.getElementById('openrouter-config');
+        const ollamaConfig = document.getElementById('ollama-config');
+        if (openrouterConfig) openrouterConfig.classList.toggle('hidden', backend !== 'openrouter');
+        if (ollamaConfig) ollamaConfig.classList.toggle('hidden', backend !== 'ollama');
+
+        // Run Ollama wizard when switching to Ollama
+        if (backend === 'ollama') {
+            this.runOllamaWizard();
+        }
+    },
+
+    /**
      * Save settings for current backend
      */
     async saveSettings() {
         const { elements } = this;
+
+        if (this._currentBackend === 'ollama') {
+            // Save Ollama settings
+            const url = document.getElementById('ollama-url-input')?.value.trim();
+            const model = document.getElementById('ollama-model-select')?.value;
+
+            if (url) OllamaClient.setBaseUrl(url);
+            if (!model) {
+                elements.keyStatus.innerHTML = '<span style="color: var(--danger);">Selecciona un modelo primero</span>';
+                elements.keyStatus.classList.remove('hidden');
+                return;
+            }
+
+            OllamaClient.setModel(model);
+
+            // Health check
+            elements.saveKeyBtn.textContent = 'Verificando...';
+            elements.saveKeyBtn.disabled = true;
+
+            const health = await OllamaClient.checkHealth();
+
+            elements.saveKeyBtn.textContent = 'Guardar';
+            elements.saveKeyBtn.disabled = false;
+
+            if (health.ok) {
+                elements.keyStatus.innerHTML = `<span class="check-icon">&#10003;</span> <span>${health.message}</span>`;
+                elements.keyStatus.classList.remove('hidden');
+                setTimeout(() => this.setState('setup'), 1000);
+            } else {
+                elements.keyStatus.innerHTML = `<span style="color: var(--danger);">${health.message}</span>`;
+                elements.keyStatus.classList.remove('hidden');
+            }
+            return;
+        }
+
+        // OpenRouter settings
         const key = elements.apiKeyInput.value.trim();
 
         if (!key) {
@@ -369,37 +427,17 @@ const UIController = {
                 this.elements.apiKeyInput.value = currentKey;
             }
 
+            // Load Ollama settings
+            if (typeof OllamaClient !== 'undefined') {
+                const ollamaUrl = document.getElementById('ollama-url-input');
+                if (ollamaUrl) ollamaUrl.value = OllamaClient.getBaseUrl();
+            }
+
             // Clear status
             this.elements.keyStatus.classList.add('hidden');
 
-            // Show a one-time welcome hint for users who have no backend configured yet
-            const isFirstSetup = !this.isBackendConfigured();
-            let onboardingBanner = document.getElementById('settings-onboarding-banner');
-            if (!onboardingBanner) {
-                onboardingBanner = document.createElement('div');
-                onboardingBanner.id = 'settings-onboarding-banner';
-                onboardingBanner.style.cssText = [
-                    'padding: 10px 12px',
-                    'margin-bottom: 16px',
-                    'background: rgba(10,132,255,0.12)',
-                    'border: 1px solid rgba(10,132,255,0.4)',
-                    'border-radius: var(--radius)',
-                    'font-size: 11px',
-                    'color: var(--text-primary)',
-                    'line-height: 1.5'
-                ].join(';');
-                onboardingBanner.innerHTML = [
-                    '<strong>Bienvenido a AutoClipper.</strong><br>',
-                    'Para analizar transcripciones necesitas una API key de OpenRouter (gratis). ',
-                    'Pegala abajo y pulsa Guardar.'
-                ].join('');
-                const content = document.querySelector('#settings-state .content');
-                if (content) content.insertBefore(onboardingBanner, content.firstChild);
-            }
-            onboardingBanner.style.display = isFirstSetup ? 'block' : 'none';
-
-            // Update auth section
-            this.updateAuthUI();
+            // Sync backend tabs with current selection
+            this.switchBackend(this._currentBackend);
         }
     },
 
@@ -655,11 +693,7 @@ const UIController = {
         const isHighPotential = clip.viralScore >= 75;
         const starPrefix = isHighPotential ? '⭐ ' : '';
 
-        // Show approved count for free users
-        const isFree = typeof AuthClient !== 'undefined' && !AuthClient.isPro();
-        const approvedCount = this.viralClips.filter(c => c.approved).length;
-        const limitInfo = isFree ? ` (${approvedCount}/${FREE_CLIP_LIMIT} aprobados)` : '';
-        this.elements.clipCounter.textContent = `[Clip ${current}/${total}]${limitInfo}`;
+        this.elements.clipCounter.textContent = `[Clip ${current}/${total}]`;
         this.elements.clipTitle.textContent = starPrefix + (clip.suggestedTitle || `Momento ${current}`);
         this.elements.clipTranscript.textContent = `"${clip.text || '...'}"`;
         this.elements.clipTimecode.textContent =
@@ -720,19 +754,9 @@ const UIController = {
      * Approve current clip and move to next
      */
     approveClip() {
-        // Free tier clip limit
-        if (typeof AuthClient !== 'undefined' && !AuthClient.isPro()) {
-            const currentApproved = this.viralClips.filter(c => c.approved).length;
-            if (!this.viralClips[this.currentClipIndex].approved && currentApproved >= FREE_CLIP_LIMIT) {
-                this.showUpgradeBanner();
-                return;
-            }
-        }
-
         this.viralClips[this.currentClipIndex].approved = true;
         this.viralClips[this.currentClipIndex].rejected = false;
         this.viralClips[this.currentClipIndex].skipped = false;
-        this.hideUpgradeBanner();
         this.nextClip();
     },
 
@@ -853,11 +877,6 @@ const UIController = {
      */
     finishReview() {
         this.approvedClips = this.viralClips.filter(clip => clip.approved);
-
-        // Enforce free tier limit (safety net)
-        if (typeof AuthClient !== 'undefined' && !AuthClient.isPro() && this.approvedClips.length > FREE_CLIP_LIMIT) {
-            this.approvedClips = this.approvedClips.slice(0, FREE_CLIP_LIMIT);
-        }
 
         const skippedCount = this.viralClips.filter(clip => clip.skipped).length;
         const rejectedCount = this.viralClips.filter(clip => clip.rejected).length;
@@ -1039,163 +1058,182 @@ const UIController = {
         }
     },
 
-    // ─── Auth & Upgrade Methods ─────────────────────────────────────────
+    // ─── Ollama Wizard Methods ──────────────────────────────────────────
 
     /**
-     * Update auth UI based on current session
+     * Detect hardware capabilities for Ollama model recommendation
      */
-    updateAuthUI() {
-        if (typeof AuthClient === 'undefined') return;
+    detectHardware() {
+        const hw = {
+            cpuCores: navigator.hardwareConcurrency || 4,
+            ramGB: navigator.deviceMemory || null,
+            gpu: 'Unknown'
+        };
 
-        const authForm = document.getElementById('auth-form');
-        const accountInfo = document.getElementById('account-info');
-        const planBadge = document.getElementById('plan-badge');
-        const upgradeBtn = document.getElementById('upgrade-btn');
-        const freeTierNotice = document.getElementById('free-tier-notice');
-
-        // Hide upgrade/tier UI — no Pro tier yet
-        upgradeBtn?.classList.add('hidden');
-        freeTierNotice?.classList.add('hidden');
-        planBadge?.classList.add('hidden');
-
-        if (AuthClient.isLoggedIn()) {
-            authForm?.classList.add('hidden');
-            accountInfo?.classList.remove('hidden');
-
-            const emailEl = document.getElementById('account-email');
-            if (emailEl) emailEl.textContent = AuthClient.getUser()?.email || '';
-        } else {
-            authForm?.classList.remove('hidden');
-            accountInfo?.classList.add('hidden');
-        }
-    },
-
-    /**
-     * Handle login
-     */
-    async handleLogin() {
-        const email = document.getElementById('auth-email')?.value.trim();
-        const password = document.getElementById('auth-password')?.value;
-        const statusEl = document.getElementById('auth-status');
-        const statusText = document.getElementById('auth-status-text');
-        const btn = document.getElementById('auth-login-btn');
-
-        if (!email || !password) return;
-
-        btn.textContent = 'Conectando...';
-        btn.disabled = true;
-
-        const result = await AuthClient.signIn(email, password);
-
-        btn.textContent = 'Iniciar sesion';
-        btn.disabled = false;
-
-        if (result.ok) {
-            await AuthClient.getProfile();
-            this.updateAuthUI();
-            statusEl?.classList.add('hidden');
-        } else {
-            if (statusText) { statusText.textContent = result.error; statusText.style.color = 'var(--danger)'; }
-            statusEl?.classList.remove('hidden');
-        }
-    },
-
-    /**
-     * Handle signup
-     */
-    async handleSignup() {
-        const email = document.getElementById('auth-email')?.value.trim();
-        const password = document.getElementById('auth-password')?.value;
-        const referralCode = document.getElementById('auth-referral')?.value.trim();
-        const statusEl = document.getElementById('auth-status');
-        const statusText = document.getElementById('auth-status-text');
-        const btn = document.getElementById('auth-signup-btn');
-
-        if (!email || !password) return;
-        if (password.length < 6) {
-            if (statusText) { statusText.textContent = 'La contrasena debe tener al menos 6 caracteres'; statusText.style.color = 'var(--danger)'; }
-            statusEl?.classList.remove('hidden');
-            return;
-        }
-
-        btn.textContent = 'Creando...';
-        btn.disabled = true;
-
-        const result = await AuthClient.signUp(email, password, referralCode);
-
-        btn.textContent = 'Registrarse';
-        btn.disabled = false;
-
-        if (result.ok) {
-            // Auto-login after signup
-            const loginResult = await AuthClient.signIn(email, password);
-            if (loginResult.ok) {
-                await AuthClient.getProfile();
-                this.updateAuthUI();
-                statusEl?.classList.add('hidden');
-            } else {
-                // Signup succeeded but auto-login failed (e.g. email confirmation required)
-                if (statusText) { statusText.textContent = 'Registro exitoso. Revisa tu correo para confirmar.'; statusText.style.color = 'var(--success, #22c55e)'; }
-                statusEl?.classList.remove('hidden');
+        // Try to detect GPU via WebGL
+        try {
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (gl) {
+                const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                if (debugInfo) {
+                    hw.gpu = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+                }
             }
-        } else {
-            if (statusText) { statusText.textContent = result.error; statusText.style.color = 'var(--danger)'; }
-            statusEl?.classList.remove('hidden');
+        } catch (e) {
+            // WebGL not available
         }
+
+        return hw;
     },
 
     /**
-     * Handle logout
+     * Recommend a model based on detected hardware
      */
-    async handleLogout() {
-        await AuthClient.signOut();
-        this.updateAuthUI();
+    recommendModel(hardware) {
+        const gpu = (hardware.gpu || '').toLowerCase();
+
+        // Detect Apple Silicon
+        const isAppleSilicon = gpu.includes('apple') || gpu.includes('m1') || gpu.includes('m2') || gpu.includes('m3') || gpu.includes('m4');
+        const isProMax = gpu.includes('pro') || gpu.includes('max') || gpu.includes('ultra');
+
+        // Detect NVIDIA GPUs
+        const isNvidia = gpu.includes('nvidia') || gpu.includes('geforce') || gpu.includes('rtx') || gpu.includes('gtx');
+        const isHighEnd = gpu.includes('3080') || gpu.includes('3090') || gpu.includes('4070') || gpu.includes('4080') || gpu.includes('4090') || gpu.includes('a100') || gpu.includes('a6000');
+
+        if (isAppleSilicon && isProMax) {
+            return { model: 'deepseek-r1:14b', reason: 'Apple Silicon Pro/Max detectado - maxima calidad' };
+        }
+        if (isAppleSilicon) {
+            return { model: 'deepseek-r1:8b', reason: 'Apple Silicon detectado - buen balance' };
+        }
+        if (isNvidia && isHighEnd) {
+            return { model: 'deepseek-r1:14b', reason: 'GPU high-end detectada - maxima calidad' };
+        }
+        if (isNvidia) {
+            return { model: 'deepseek-r1:8b', reason: 'GPU NVIDIA detectada - buen balance' };
+        }
+
+        // Fallback: lightweight model
+        return { model: 'qwen2.5:3b', reason: 'GPU no detectada - modelo ligero y rapido' };
     },
 
     /**
-     * Refresh plan status (for users who just paid)
+     * Run the Ollama onboarding wizard
      */
-    async refreshPlanStatus() {
-        if (typeof AuthClient === 'undefined' || !AuthClient.isLoggedIn()) return;
+    async runOllamaWizard() {
+        const wizard = document.getElementById('ollama-wizard');
+        const step = document.getElementById('wizard-step');
+        if (!wizard || !step) return;
 
-        const btn = document.getElementById('refresh-plan-btn');
-        if (btn) { btn.textContent = 'Verificando...'; btn.disabled = true; }
+        wizard.classList.remove('hidden');
+        step.innerHTML = '<strong>Verificando Ollama...</strong>';
 
-        await AuthClient.getProfile();
-        this.updateAuthUI();
-
-        if (btn) { btn.textContent = 'Actualizar estado del plan'; btn.disabled = false; }
-    },
-
-    /**
-     * Open Stripe checkout
-     */
-    openUpgrade() {
-        if (typeof AuthClient === 'undefined') return;
-
-        if (!AuthClient.isLoggedIn()) {
-            this.setState('settings');
+        // Step 1: Check if Ollama is running
+        const url = document.getElementById('ollama-url-input')?.value.trim() || 'http://localhost:11434';
+        let models = [];
+        try {
+            const response = await fetch(`${url}/api/tags`);
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            const data = await response.json();
+            models = data.models || [];
+        } catch (e) {
+            step.innerHTML = [
+                '<strong style="color: var(--danger);">Ollama no esta corriendo</strong><br>',
+                '<br>1. Descarga Ollama: <a href="#" onclick="UIController.openExternalLink(\'https://ollama.com\'); return false;" style="color: var(--accent);">ollama.com</a>',
+                '<br>2. Instala y ejecuta la app',
+                '<br>3. Vuelve aqui y pulsa "Detectar modelos"'
+            ].join('');
             return;
         }
 
-        const url = AuthClient.getCheckoutUrl('monthly');
-        this.openExternalLink(url);
+        // Step 2: Detect hardware
+        const hardware = this.detectHardware();
+        const recommendation = this.recommendModel(hardware);
+
+        // Step 3: Show status
+        const modelNames = models.map(m => m.name);
+        const hasRecommended = modelNames.some(m => m.startsWith(recommendation.model.split(':')[0]));
+
+        let html = `<strong>Ollama conectado</strong> (${models.length} modelo${models.length !== 1 ? 's' : ''})`;
+        html += `<br><br><strong>Hardware:</strong> ${hardware.cpuCores} cores`;
+        if (hardware.ramGB) html += `, ${hardware.ramGB}GB RAM`;
+        html += `<br><strong>GPU:</strong> ${this._escHtml(hardware.gpu)}`;
+        html += `<br><br><strong>Recomendado:</strong> <code>${recommendation.model}</code>`;
+        html += `<br><small>${recommendation.reason}</small>`;
+
+        if (!hasRecommended) {
+            html += `<br><br><span style="color: var(--warning);">Modelo no instalado. Ejecuta en terminal:</span>`;
+            html += `<br><code style="user-select: all;">ollama pull ${recommendation.model}</code>`;
+        } else {
+            html += `<br><br><span style="color: var(--success, #22c55e);">Modelo disponible</span>`;
+        }
+
+        step.innerHTML = html;
+
+        // Auto-populate model selector
+        this.populateOllamaModels(models, recommendation.model);
     },
 
     /**
-     * Show upgrade banner in review state
+     * Detect and list Ollama models
      */
-    showUpgradeBanner() {
-        const banner = document.getElementById('upgrade-banner');
-        if (banner) banner.classList.remove('hidden');
+    async detectOllamaModels() {
+        const btn = document.getElementById('detect-models-btn');
+        if (btn) { btn.textContent = 'Buscando...'; btn.disabled = true; }
+
+        const url = document.getElementById('ollama-url-input')?.value.trim() || 'http://localhost:11434';
+        if (typeof OllamaClient !== 'undefined') {
+            OllamaClient.setBaseUrl(url);
+        }
+
+        try {
+            const response = await fetch(`${url}/api/tags`);
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            const data = await response.json();
+            const models = data.models || [];
+
+            if (models.length === 0) {
+                this.elements.keyStatus.innerHTML = '<span style="color: var(--warning);">Ollama corriendo pero sin modelos. Ejecuta: ollama pull qwen2.5:3b</span>';
+                this.elements.keyStatus.classList.remove('hidden');
+            }
+
+            const recommendation = this.recommendModel(this.detectHardware());
+            this.populateOllamaModels(models, recommendation.model);
+            this.runOllamaWizard();
+        } catch (e) {
+            this.elements.keyStatus.innerHTML = '<span style="color: var(--danger);">No se puede conectar a Ollama. Asegurate de que esta corriendo.</span>';
+            this.elements.keyStatus.classList.remove('hidden');
+        }
+
+        if (btn) { btn.textContent = 'Detectar modelos'; btn.disabled = false; }
     },
 
     /**
-     * Hide upgrade banner
+     * Populate the Ollama model selector dropdown
      */
-    hideUpgradeBanner() {
-        const banner = document.getElementById('upgrade-banner');
-        if (banner) banner.classList.add('hidden');
+    populateOllamaModels(models, recommendedModel) {
+        const select = document.getElementById('ollama-model-select');
+        if (!select) return;
+
+        const currentModel = typeof OllamaClient !== 'undefined' ? OllamaClient.getModel() : null;
+
+        select.innerHTML = '';
+        if (models.length === 0) {
+            select.innerHTML = '<option value="">-- No hay modelos --</option>';
+            return;
+        }
+
+        models.forEach(m => {
+            const option = document.createElement('option');
+            option.value = m.name;
+            const isRecommended = m.name.startsWith(recommendedModel.split(':')[0]);
+            option.textContent = m.name + (isRecommended ? ' (recomendado)' : '');
+            if (m.name === currentModel || (isRecommended && !currentModel)) {
+                option.selected = true;
+            }
+            select.appendChild(option);
+        });
     },
 
     /**
